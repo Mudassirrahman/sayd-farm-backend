@@ -20,7 +20,7 @@ connectDB();
 app.use(
   cors({
     origin: [
-      "https://syed-farm-frontend.vercel.app/",
+      "https://syed-farm-frontend.vercel.app",
       "http://localhost:3000",
       "http://localhost:5173",
     ],
