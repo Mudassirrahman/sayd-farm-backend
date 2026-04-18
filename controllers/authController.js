@@ -134,12 +134,10 @@ const resendVerificationEmail = async (req, res) => {
 
     res.status(200).json({ message: "Verification email sent successfully" });
   } catch (error) {
-    res
-      .status(500)
-      .json({
-        message: "Failed to resend verification email",
-        error: error.message,
-      });
+    res.status(500).json({
+      message: "Failed to resend verification email",
+      error: error.message,
+    });
   }
 };
 
@@ -164,6 +162,14 @@ const login = async (req, res) => {
         requiresVerification: true,
       });
     }
+
+    if (isExist.role !== "admin" && !isExist.isApproved) {
+      return res.status(403).json({
+        message:
+          "Aap ka account abhi Admin ki taraf se pending hai. Approval ka intezar karein.",
+      });
+    }
+
 
     const comparePassword = await bcrypt.compare(password, isExist.password);
     if (!comparePassword) {
@@ -283,4 +289,3 @@ module.exports = {
   forgotPassword,
   resetPassword,
 };
-

@@ -6,6 +6,7 @@ const connectDB = require("./config/db");
 // Import Routes
 const authRoutes = require("./routes/authRoutes");
 const expenseRoutes = require("./routes/expenseRoutes"); 
+const userRoutes = require("./routes/userRoutes");
 
 const app = express();
 
@@ -19,6 +20,7 @@ connectDB();
 app.use(
   cors({
     origin: [
+      "https://syed-farm-frontend.vercel.app/",
       "http://localhost:3000",
       "http://localhost:5173",
     ],
@@ -29,6 +31,7 @@ app.use(express.json());
 
 // Routes
 app.use("/auth", authRoutes);
+app.use("/users", userRoutes);
 app.use("/expenses", expenseRoutes);
 
 // Default route
