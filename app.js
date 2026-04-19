@@ -5,8 +5,9 @@ const connectDB = require("./config/db");
 
 // Import Routes
 const authRoutes = require("./routes/authRoutes");
-const expenseRoutes = require("./routes/expenseRoutes"); 
+const expenseRoutes = require("./routes/expenseRoutes");
 const userRoutes = require("./routes/userRoutes");
+const advanceRoutes = require("./routes/advanceRoutes");
 
 const app = express();
 
@@ -25,7 +26,7 @@ app.use(
       "http://localhost:5173",
     ],
     credentials: true,
-  })
+  }),
 );
 app.use(express.json());
 
@@ -33,6 +34,7 @@ app.use(express.json());
 app.use("/auth", authRoutes);
 app.use("/users", userRoutes);
 app.use("/expenses", expenseRoutes);
+app.use("/advances", advanceRoutes);
 
 // Default route
 app.get("/", (req, res) => {
@@ -40,10 +42,10 @@ app.get("/", (req, res) => {
 });
 
 // Server (for local development)
-// const PORT = process.env.PORT || 8080;
-// app.listen(PORT, () => {
-//   console.log(`Server running on port ${PORT}`);
-// });
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
 
 // Export for Vercel serverless
-module.exports = app;
+// module.exports = app;

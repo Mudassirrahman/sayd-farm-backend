@@ -1,4 +1,5 @@
 const Expense = require("../models/expense");
+const mongoose = require("mongoose");
 
 const addExpense = async (req, res) => {
   try {
@@ -11,7 +12,7 @@ const addExpense = async (req, res) => {
     }
 
     const newExpense = new Expense({
-      user: req.user._id, 
+      user: req.user._id,
       itemName,
       amount,
       category,
@@ -31,27 +32,40 @@ const addExpense = async (req, res) => {
       .json({ message: "Failed to add expense", error: error.message });
   }
 };
-
 const getExpenses = async (req, res) => {
   try {
-    const { startDate, endDate, category } = req.query;
+    const { startDate, endDate, category, userId } = req.query;
 
     let query = {};
 
     if (startDate || endDate) {
       query.expenseDate = {};
-      if (startDate) query.expenseDate.$gte = new Date(startDate); 
-      if (endDate) query.expenseDate.$lte = new Date(endDate); 
+      if (startDate) query.expenseDate.$gte = new Date(startDate);
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setUTCHours(23, 59, 59, 999);
+        query.expenseDate.$lte = end;
+      }
     }
 
     if (category) {
       query.category = category;
     }
 
+    const currentUserId = req.user._id || req.user.userId || req.user.id;
+
+    // ✅ FIX: User filter ki logic (Admin_self aur Manager ke hisaab se)
+    if (userId === "admin_self") {
+      query.user = new mongoose.Types.ObjectId(currentUserId);
+    } else if (userId) {
+      query.user = new mongoose.Types.ObjectId(userId);
+    }
+
     const expensesList = await Expense.find(query)
-      .populate("user", "name role") 
+      .populate("user", "name role")
       .sort({ expenseDate: -1 });
 
+    // 1. Sab ka Total (Grand Total based on filter)
     const totalAmountAgg = await Expense.aggregate([
       { $match: query },
       { $group: { _id: null, totalAmount: { $sum: "$amount" } } },
@@ -59,11 +73,37 @@ const getExpenses = async (req, res) => {
     const grandTotal =
       totalAmountAgg.length > 0 ? totalAmountAgg[0].totalAmount : 0;
 
-    // 3. Get Category-wise Totals (Har category par kitna laga)
+    let adminTotal = 0;
+    let managerTotal = 0;
+
+    // ✅ FIX: Calculation ko filter ke hisaab se theek kiya
+    if (userId === "admin_self") {
+      adminTotal = grandTotal;
+      managerTotal = 0;
+    } else if (userId) {
+      // Agar Manager select kiya hai
+      adminTotal = 0;
+      managerTotal = grandTotal;
+    } else {
+      // Agar koi filter nahi laga to alag alag calculate karo
+      const myExpensesAgg = await Expense.aggregate([
+        {
+          $match: {
+            ...query,
+            user: new mongoose.Types.ObjectId(currentUserId),
+          },
+        },
+        { $group: { _id: null, totalAmount: { $sum: "$amount" } } },
+      ]);
+      adminTotal = myExpensesAgg.length > 0 ? myExpensesAgg[0].totalAmount : 0;
+      managerTotal = grandTotal - adminTotal;
+    }
+
+    // Category-wise Totals
     const categoryTotals = await Expense.aggregate([
       { $match: query },
       { $group: { _id: "$category", totalAmount: { $sum: "$amount" } } },
-      { $sort: { totalAmount: -1 } }, // Ziada kharchay wali category upar
+      { $sort: { totalAmount: -1 } },
     ]);
 
     res.status(200).json({
@@ -71,6 +111,8 @@ const getExpenses = async (req, res) => {
       summary: {
         totalRecords: expensesList.length,
         grandTotal: grandTotal,
+        adminTotal: adminTotal,
+        managerTotal: managerTotal,
         categoryBreakdown: categoryTotals,
       },
       data: expensesList,
@@ -81,7 +123,6 @@ const getExpenses = async (req, res) => {
       .json({ message: "Failed to fetch expenses", error: error.message });
   }
 };
-
 // 3. UPDATE EXPENSE (Admin Only)
 const updateExpense = async (req, res) => {
   try {
