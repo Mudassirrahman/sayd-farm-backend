@@ -1,9 +1,19 @@
 const Expense = require("../models/expense");
 const mongoose = require("mongoose");
+const cloudinary = require("../config/cloudinary");
+
+const uploadToCloudinary = (buffer, mimetype) =>
+  new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { folder: "farm-receipts", resource_type: "auto" },
+      (error, result) => (error ? reject(error) : resolve(result))
+    );
+    stream.end(buffer);
+  });
 
 const addExpense = async (req, res) => {
   try {
-    const { itemName, amount, category, expenseDate, description } = req.body;
+    const { itemName, amount, category, subcategory, expenseDate, description } = req.body;
 
     if (!itemName || !amount || !category) {
       return res
@@ -11,13 +21,21 @@ const addExpense = async (req, res) => {
         .json({ message: "Item name, amount, and category are required" });
     }
 
+    let receiptUrl = null;
+    if (req.file) {
+      const result = await uploadToCloudinary(req.file.buffer, req.file.mimetype);
+      receiptUrl = result.secure_url;
+    }
+
     const newExpense = new Expense({
       user: req.user._id,
       itemName,
       amount,
       category,
+      subcategory: subcategory || null,
       expenseDate: expenseDate || Date.now(),
       description,
+      receiptUrl,
     });
 
     await newExpense.save();

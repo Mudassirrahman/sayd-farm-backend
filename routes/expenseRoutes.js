@@ -10,10 +10,11 @@ const {
 
 const authenticateUser = require("../middleware/authMiddleware");
 const roleMiddleware = require("../middleware/roleMiddleware");
+const upload = require("../middleware/upload");
 
 router.get("/", authenticateUser, getExpenses);
 
-router.post("/", authenticateUser, addExpense);
+router.post("/", authenticateUser, upload.single("receipt"), addExpense);
 
 router.put("/:id", authenticateUser, roleMiddleware("admin"), updateExpense);
 

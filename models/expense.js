@@ -20,12 +20,12 @@ const expenseSchema = new mongoose.Schema(
     category: {
       type: String,
       required: true,
-      enum: [
-        "Kitchen & Mess",
-        "Machinery & Fuel",
-        "Labor & Wages",
-        "Miscellaneous",
-      ],
+      trim: true,
+    },
+    subcategory: {
+      type: String,
+      trim: true,
+      default: null,
     },
     expenseDate: {
       type: Date,
@@ -35,6 +35,10 @@ const expenseSchema = new mongoose.Schema(
     description: {
       type: String,
       trim: true,
+    },
+    receiptUrl: {
+      type: String,
+      default: null,
     },
   },
   {

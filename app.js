@@ -8,6 +8,7 @@ const authRoutes = require("./routes/authRoutes");
 const expenseRoutes = require("./routes/expenseRoutes");
 const userRoutes = require("./routes/userRoutes");
 const advanceRoutes = require("./routes/advanceRoutes");
+const categoryRoutes = require("./routes/categoryRoutes");
 
 const app = express();
 
@@ -35,6 +36,7 @@ app.use("/auth", authRoutes);
 app.use("/users", userRoutes);
 app.use("/expenses", expenseRoutes);
 app.use("/advances", advanceRoutes);
+app.use("/categories", categoryRoutes);
 
 // Default route
 app.get("/", (req, res) => {
