@@ -16,7 +16,13 @@ router.get("/", authenticateUser, getExpenses);
 
 router.post("/", authenticateUser, upload.single("receipt"), addExpense);
 
-router.put("/:id", authenticateUser, roleMiddleware("admin"), updateExpense);
+router.put(
+  "/:id",
+  authenticateUser,
+  roleMiddleware("admin"),
+  upload.single("receipt"),
+  updateExpense,
+);
 
 router.delete("/:id", authenticateUser, roleMiddleware("admin"), deleteExpense);
 

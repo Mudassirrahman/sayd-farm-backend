@@ -1,8 +1,19 @@
-const multer = require("multer")
+const multer = require("multer");
 
-// multer configuration
-const storage = multer.memoryStorage()
+const storage = multer.memoryStorage();
 
-const upload = multer({ storage })
+const fileFilter = (req, file, cb) => {
+  if (file.mimetype.startsWith("image/")) {
+    cb(null, true);
+  } else {
+    cb(new Error("Only image files are allowed for receipts"), false);
+  }
+};
 
-module.exports = upload
+const upload = multer({
+  storage,
+  fileFilter,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+});
+
+module.exports = upload;

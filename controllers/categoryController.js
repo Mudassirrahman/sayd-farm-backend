@@ -3,8 +3,19 @@ const Category = require("../models/category");
 // GET all categories
 const getCategories = async (req, res) => {
   try {
-    const categories = await Category.find().sort({ name: 1 });
-    res.status(200).json({ categories });
+    const categories = await Category.find({}, { name: 1, subcategories: 1 })
+      .sort({ name: 1 })
+      .lean();
+
+    const normalizedCategories = categories.map((category) => ({
+      ...category,
+      subcategories: Array.isArray(category.subcategories)
+        ? category.subcategories
+            .map((item) => (typeof item === "string" ? item.trim() : ""))
+            .filter(Boolean)
+        : [],
+    }));
+    res.status(200).json({ categories: normalizedCategories });
   } catch (error) {
     res.status(500).json({ message: "Failed to fetch categories", error: error.message });
   }

@@ -7,6 +7,11 @@ const expenseSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
     itemName: {
       type: String,
       required: true,
@@ -40,6 +45,7 @@ const expenseSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    serialNo: { type: Number },
   },
   {
     timestamps: true,

@@ -176,9 +176,13 @@ const login = async (req, res) => {
       return res.status(401).json({ message: "Email or password not match" });
     }
 
-    const token = jwt.sign({ id: isExist._id }, process.env.JWT_SECRET_KEY, {
+    const token = jwt.sign(
+      { id: isExist._id, _id: isExist._id, role: isExist.role },
+      process.env.JWT_SECRET_KEY,
+      {
       expiresIn: "30d",
-    });
+      },
+    );
 
     return res.status(200).json({
       message: "User logged in successfully",
