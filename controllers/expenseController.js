@@ -156,8 +156,12 @@ const getExpenses = async (req, res) => {
         query.user = currentUserId;
         advanceQuery.user = currentUserId;
       } else if (userId) {
-        query.user = new mongoose.Types.ObjectId(userId);
-        advanceQuery.user = new mongoose.Types.ObjectId(userId);
+        const filterUserId = new mongoose.Types.ObjectId(userId);
+        // Match any record where the selected user is involved in ANY capacity:
+        //   Expenses — owner (user) OR the person who logged it (createdBy)
+        //   Advances — recipient (user) OR the person who gave it (givenBy)
+        query.$or = [{ user: filterUserId }, { createdBy: filterUserId }];
+        advanceQuery.$or = [{ user: filterUserId }, { givenBy: filterUserId }];
       }
     }
 
@@ -320,44 +324,67 @@ const getExpenses = async (req, res) => {
       userId: item.rawUserId,
     }));
 
-    // Summary cards (expense totals only, unchanged logic)
-    const totalAmountAgg = await Expense.aggregate([
-      { $match: query },
-      { $group: { _id: null, totalAmount: { $sum: "$amount" } } },
+    // ── Summary Cards (4 precise values) ────────────────────────────────────
+    //
+    // adminAllocatedExpense: admin entered the expense on behalf of a manager
+    //   → identified by createdBy ∈ admin user IDs
+    // managerDirectExpense: manager entered their own expense (createdBy = null
+    //   for old records OR createdBy.role = "user")
+    //   → totalExpense - adminAllocatedExpense
+    // totalFunds: sum of all advances in scope (date + user filtered)
+    // remainingBalance: totalFunds - totalExpense (supports negative values)
+
+    const adminUserIds = await User.find({ role: "admin" }).distinct("_id");
+
+    const [expenseSummary, fundSummaryAgg, categoryTotals] = await Promise.all([
+      // Single pass: get totalExpense and the admin-allocated slice together
+      Expense.aggregate([
+        { $match: query },
+        {
+          $group: {
+            _id: null,
+            totalExpense: { $sum: "$amount" },
+            adminAllocatedExpense: {
+              $sum: {
+                $cond: [{ $in: ["$createdBy", adminUserIds] }, "$amount", 0],
+              },
+            },
+          },
+        },
+      ]),
+      // Fund total — uses advanceQuery (date + user, no category restriction)
+      // because advances have no category field.
+      // Skipped entirely for admin_personal mode (admin has no fund balance).
+      mode !== "admin_personal"
+        ? Advance.aggregate([
+            { $match: advanceQuery },
+            { $group: { _id: null, totalFunds: { $sum: "$amount" } } },
+          ])
+        : Promise.resolve([]),
+      // Category breakdown for the breakdown strip
+      Expense.aggregate([
+        { $match: query },
+        { $group: { _id: "$category", totalAmount: { $sum: "$amount" } } },
+        { $sort: { totalAmount: -1 } },
+      ]),
     ]);
-    const grandTotal = totalAmountAgg.length > 0 ? totalAmountAgg[0].totalAmount : 0;
 
-    let adminTotal = 0;
-    let managerTotal = 0;
-
-    if (explicitMode === "admin_personal" || userId === "admin_self") {
-      adminTotal = grandTotal;
-    } else if (explicitMode === "manager_ledger" && !userId) {
-      managerTotal = grandTotal;
-    } else if (userId) {
-      managerTotal = grandTotal;
-    } else {
-      const myExpensesAgg = await Expense.aggregate([
-        { $match: { ...query, user: currentUserId } },
-        { $group: { _id: null, totalAmount: { $sum: "$amount" } } },
-      ]);
-      adminTotal = myExpensesAgg.length > 0 ? myExpensesAgg[0].totalAmount : 0;
-      managerTotal = grandTotal - adminTotal;
-    }
-
-    const categoryTotals = await Expense.aggregate([
-      { $match: query },
-      { $group: { _id: "$category", totalAmount: { $sum: "$amount" } } },
-      { $sort: { totalAmount: -1 } },
-    ]);
+    const totalExpense          = expenseSummary[0]?.totalExpense          || 0;
+    const adminAllocatedExpense = expenseSummary[0]?.adminAllocatedExpense || 0;
+    const managerDirectExpense  = totalExpense - adminAllocatedExpense;
+    const totalFunds            = fundSummaryAgg[0]?.totalFunds            || 0;
+    // Intentionally allow negative — manager spending with empty fund goes negative
+    const remainingBalance      = totalFunds - totalExpense;
 
     res.status(200).json({
       message: "Ledger fetched successfully",
       summary: {
         totalRecords: expensesList.length,
-        grandTotal,
-        adminTotal,
-        managerTotal,
+        totalExpense,
+        managerDirectExpense,
+        adminAllocatedExpense,
+        totalFunds,
+        remainingBalance,
         categoryBreakdown: categoryTotals,
       },
       data: ledgerData,

@@ -15,23 +15,35 @@ const addAdvance = async (req, res) => {
         .json({ message: "Amount must be a valid number greater than 0" });
     }
 
-    // Manager sirf apne account mein credit add kar sakta hai
-    // Admin kisi bhi manager ko add kar sakta hai
-    let targetUserId = req.user._id;
-    if (req.user.role === "admin" && user) {
-      targetUserId = user;
-    } else if (req.user.role !== "admin" && user && user !== String(req.user._id)) {
-      return res.status(403).json({
-        message: "You can only add funds to your own account.",
-      });
+    // Role-based field enforcement
+    if (req.user.role === "admin") {
+      if (!user) {
+        return res.status(400).json({
+          message: "Target manager is required. Please select a manager.",
+        });
+      }
+      const targetUser = await User.findById(user).select("role");
+      if (!targetUser || targetUser.role !== "user") {
+        return res.status(400).json({
+          message: "Invalid target. Please select a valid manager account.",
+        });
+      }
+    } else {
+      if (!description || !String(description).trim()) {
+        return res.status(400).json({
+          message: "Description is mandatory. Please explain the source of this fund (e.g. sold scrap, advance received).",
+        });
+      }
     }
+
+    const targetUserId = req.user.role === "admin" ? user : req.user._id;
 
     const advance = new Advance({
       user: targetUserId,
       amount: amountNumber,
       dateGiven: dateGiven || new Date(),
-      description,
-      givenBy: req.user._id, // Token se Admin ki ID aayegi
+      description: description || "",
+      givenBy: req.user._id,
     });
 
     await advance.save();

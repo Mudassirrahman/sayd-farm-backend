@@ -1,9 +1,12 @@
 const User = require("../models/user");
 
 // 1. Saare users ki list lana (Sirf Admin ke liye)
+// ?includeAdmins=true → returns all roles (used by filter dropdowns)
 const getAllUsers = async (req, res) => {
   try {
-    const users = await User.find({ role: "user" })
+    const { includeAdmins } = req.query;
+    const filter = includeAdmins === "true" ? {} : { role: "user" };
+    const users = await User.find(filter)
       .select("-password")
       .sort({ createdAt: -1 });
     res.status(200).json({ users });
