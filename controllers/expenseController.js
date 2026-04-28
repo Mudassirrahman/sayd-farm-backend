@@ -159,7 +159,7 @@ const getExpenses = async (req, res) => {
         const filterUserId = new mongoose.Types.ObjectId(userId);
         // Match any record where the selected user is involved in ANY capacity:
         //   Expenses — owner (user) OR the person who logged it (createdBy)
-        //   Advances — recipient (user) OR the person who gave it (givenBy)
+        //   Advances — recipient (user) OR the person who gave it (givenBy) 
         query.$or = [{ user: filterUserId }, { createdBy: filterUserId }];
         advanceQuery.$or = [{ user: filterUserId }, { givenBy: filterUserId }];
       }
