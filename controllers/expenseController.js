@@ -301,6 +301,7 @@ const getExpenses = async (req, res) => {
     //   if (bDay !== aDay) return bDay - aDay;   // Newer day at top
     //   return a.srNumber - b.srNumber;           // Within same day: ascending (chronological)
     // });
+     mergedList.sort((a, b) => b.srNumber - a.srNumber);
 
     // Build clean response shape matching the 14 DataGrid columns exactly
     const ledgerData = mergedList.map((item) => ({
