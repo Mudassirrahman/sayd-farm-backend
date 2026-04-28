@@ -294,13 +294,13 @@ const getExpenses = async (req, res) => {
     // Display sort: newest calendar-day first so latest activity appears at the top.
     // Within the same calendar day entries stay in chronological (ascending srNumber) order,
     // which preserves the Auto-Adjustment → Expense read sequence within a day.
-    const MS_PER_DAY = 86400000;
-    mergedList.sort((a, b) => {
-      const aDay = Math.floor(getTime(a.primaryDate) / MS_PER_DAY);
-      const bDay = Math.floor(getTime(b.primaryDate) / MS_PER_DAY);
-      if (bDay !== aDay) return bDay - aDay;   // Newer day at top
-      return a.srNumber - b.srNumber;           // Within same day: ascending (chronological)
-    });
+    // const MS_PER_DAY = 86400000;
+    // mergedList.sort((a, b) => {
+    //   const aDay = Math.floor(getTime(a.primaryDate) / MS_PER_DAY);
+    //   const bDay = Math.floor(getTime(b.primaryDate) / MS_PER_DAY);
+    //   if (bDay !== aDay) return bDay - aDay;   // Newer day at top
+    //   return a.srNumber - b.srNumber;           // Within same day: ascending (chronological)
+    // });
 
     // Build clean response shape matching the 14 DataGrid columns exactly
     const ledgerData = mergedList.map((item) => ({
