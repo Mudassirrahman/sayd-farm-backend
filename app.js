@@ -12,7 +12,7 @@ const categoryRoutes = require("./routes/categoryRoutes");
 
 const app = express();
 
-// Load environment variables
+// Load environment variables 
 dotenv.config();
 
 // Connect to MongoDB
