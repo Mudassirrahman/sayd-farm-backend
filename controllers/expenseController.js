@@ -295,18 +295,27 @@ const getExpenses = async (req, res) => {
       return a.rowType === "Add Fund" ? -1 : 1;
     });
 
-    // Assign monthly-reset Sr Numbers based on DB creation date (createdAt), not purchasing date.
-    // So back-dated entries don't affect past months' serial sequences.
+    // Assign monthly-reset Sr Numbers based on createdAt ORDER within each createdAt-month.
+    // We sort a separate copy by createdAt to get the correct sequence, then map sr# back
+    // to the main list (which stays sorted by primaryDate for balance calculation).
+    const sortedByCreatedAt = [...mergedList].sort(
+      (a, b) => getTime(a.createdAt) - getTime(b.createdAt)
+    );
     const monthCounter = new Map();
-    mergedList = mergedList.map((item) => {
+    const srMap = new Map();
+    sortedByCreatedAt.forEach((item) => {
       const d = new Date(item.createdAt);
       const monthKey = d.getFullYear() * 100 + d.getMonth();
       const current = (monthCounter.get(monthKey) || 0) + 1;
       monthCounter.set(monthKey, current);
-      return { ...item, srNumber: current };
+      srMap.set(item._id.toString(), current);
     });
+    mergedList = mergedList.map((item) => ({
+      ...item,
+      srNumber: srMap.get(item._id.toString()),
+    }));
 
-    // Calculate running balance per user key
+    // Calculate running balance per user key (uses primaryDate sort order — unchanged)
     const balanceByUser = new Map();
     mergedList = mergedList.map((item) => {
       const prev = balanceByUser.get(item.rawUserId) || 0;
@@ -316,20 +325,12 @@ const getExpenses = async (req, res) => {
       return { ...item, balance: next };
     });
 
-    // Display sort: newest calendar-day first so latest activity appears at the top.
-    // Within the same calendar day entries stay in chronological (ascending srNumber) order,
-    // which preserves the Auto-Adjustment → Expense read sequence within a day.
-    // const MS_PER_DAY = 86400000;
-    // mergedList.sort((a, b) => {
-    //   const aDay = Math.floor(getTime(a.primaryDate) / MS_PER_DAY);
-    //   const bDay = Math.floor(getTime(b.primaryDate) / MS_PER_DAY);
-    //   if (bDay !== aDay) return bDay - aDay;   // Newer day at top
-    //   return a.srNumber - b.srNumber;           // Within same day: ascending (chronological)
-    // });
-    // Display sort: newest month first; within the same month newest entry (highest srNumber) first
+    // Display sort: newest createdAt-month first; within same month newest sr# (highest) first.
+    // Using createdAt month so grouping matches the sr# month — back-dated entries
+    // (April purchase entered in May) show under May, consistent with their May sr#.
     mergedList.sort((a, b) => {
-      const aYM = new Date(a.primaryDate).getFullYear() * 100 + new Date(a.primaryDate).getMonth();
-      const bYM = new Date(b.primaryDate).getFullYear() * 100 + new Date(b.primaryDate).getMonth();
+      const aYM = new Date(a.createdAt).getFullYear() * 100 + new Date(a.createdAt).getMonth();
+      const bYM = new Date(b.createdAt).getFullYear() * 100 + new Date(b.createdAt).getMonth();
       if (bYM !== aYM) return bYM - aYM;
       return b.srNumber - a.srNumber;
     });
