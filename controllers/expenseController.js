@@ -108,11 +108,12 @@ const addExpense = async (req, res) => {
 
 const getExpenses = async (req, res) => {
   try {
-    const { startDate, endDate, category, userId, mode } = req.query;
+    const { startDate, endDate, entryStartDate, entryEndDate, category, userId, mode } = req.query;
 
     let query = {};
     let advanceQuery = {};
 
+    // Filter by purchasing date (expenseDate / dateGiven)
     if (startDate || endDate) {
       query.expenseDate = {};
       advanceQuery.dateGiven = {};
@@ -125,6 +126,22 @@ const getExpenses = async (req, res) => {
         end.setUTCHours(23, 59, 59, 999);
         query.expenseDate.$lte = end;
         advanceQuery.dateGiven.$lte = end;
+      }
+    }
+
+    // Filter by DB entry date (createdAt) — used by the month dropdown
+    if (entryStartDate || entryEndDate) {
+      query.createdAt = {};
+      advanceQuery.createdAt = {};
+      if (entryStartDate) {
+        query.createdAt.$gte = new Date(entryStartDate);
+        advanceQuery.createdAt.$gte = new Date(entryStartDate);
+      }
+      if (entryEndDate) {
+        const end = new Date(entryEndDate);
+        end.setUTCHours(23, 59, 59, 999);
+        query.createdAt.$lte = end;
+        advanceQuery.createdAt.$lte = end;
       }
     }
 
@@ -278,8 +295,16 @@ const getExpenses = async (req, res) => {
       return a.rowType === "Add Fund" ? -1 : 1;
     });
 
-    // Assign sequential Sr Numbers (1 = oldest, N = newest)
-    mergedList = mergedList.map((item, index) => ({ ...item, srNumber: index + 1 }));
+    // Assign monthly-reset Sr Numbers based on DB creation date (createdAt), not purchasing date.
+    // So back-dated entries don't affect past months' serial sequences.
+    const monthCounter = new Map();
+    mergedList = mergedList.map((item) => {
+      const d = new Date(item.createdAt);
+      const monthKey = d.getFullYear() * 100 + d.getMonth();
+      const current = (monthCounter.get(monthKey) || 0) + 1;
+      monthCounter.set(monthKey, current);
+      return { ...item, srNumber: current };
+    });
 
     // Calculate running balance per user key
     const balanceByUser = new Map();
@@ -301,7 +326,13 @@ const getExpenses = async (req, res) => {
     //   if (bDay !== aDay) return bDay - aDay;   // Newer day at top
     //   return a.srNumber - b.srNumber;           // Within same day: ascending (chronological)
     // });
-     mergedList.sort((a, b) => b.srNumber - a.srNumber);
+    // Display sort: newest month first; within the same month newest entry (highest srNumber) first
+    mergedList.sort((a, b) => {
+      const aYM = new Date(a.primaryDate).getFullYear() * 100 + new Date(a.primaryDate).getMonth();
+      const bYM = new Date(b.primaryDate).getFullYear() * 100 + new Date(b.primaryDate).getMonth();
+      if (bYM !== aYM) return bYM - aYM;
+      return b.srNumber - a.srNumber;
+    });
 
     // Build clean response shape matching the 14 DataGrid columns exactly
     const ledgerData = mergedList.map((item) => ({
