@@ -15,7 +15,7 @@ const app = express();
 // Load environment variables 
 dotenv.config();
 
-// Connect to MongoDB
+// Connect to MongoDB 
 connectDB();
 
 // Middlewares
