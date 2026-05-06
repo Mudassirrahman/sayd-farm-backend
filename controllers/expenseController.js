@@ -223,6 +223,7 @@ const getExpenses = async (req, res) => {
         createdAt: exp.createdAt,
         isAutoAdjustment: false,
         linkedExpense: null,
+        status: exp.status || "pending",
       });
     });
 
@@ -315,12 +316,20 @@ const getExpenses = async (req, res) => {
       srNumber: srMap.get(item._id.toString()),
     }));
 
-    // Calculate running balance per user key (uses primaryDate sort order — unchanged)
+    // Calculate running balance per user key (uses primaryDate sort order — unchanged).
+    // Only "approved" expenses deduct from balance; pending and rejected are shown
+    // in the ledger but do NOT affect the running balance.
     const balanceByUser = new Map();
     mergedList = mergedList.map((item) => {
       const prev = balanceByUser.get(item.rawUserId) || 0;
-      const next =
-        item.rowType === "Add Fund" ? prev + item.creditIn : prev - item.debitOut;
+      let next;
+      if (item.rowType === "Add Fund") {
+        next = prev + item.creditIn;
+      } else if (item.status === "approved") {
+        next = prev - item.debitOut;
+      } else {
+        next = prev; // pending / rejected — no balance change
+      }
       balanceByUser.set(item.rawUserId, next);
       return { ...item, balance: next };
     });
@@ -335,7 +344,7 @@ const getExpenses = async (req, res) => {
       return b.srNumber - a.srNumber;
     });
 
-    // Build clean response shape matching the 14 DataGrid columns exactly
+    // Build clean response shape matching the DataGrid columns
     const ledgerData = mergedList.map((item) => ({
       _id: item._id,
       srNumber: item.srNumber,
@@ -355,6 +364,7 @@ const getExpenses = async (req, res) => {
       isAutoAdjustment: item.isAutoAdjustment,
       linkedExpense: item.linkedExpense,
       userId: item.rawUserId,
+      status: item.status ?? null,
     }));
 
     // ── Summary Cards (4 precise values) ────────────────────────────────────
@@ -369,51 +379,78 @@ const getExpenses = async (req, res) => {
 
     const adminUserIds = await User.find({ role: "admin" }).distinct("_id");
 
-    const [expenseSummary, fundSummaryAgg, categoryTotals] = await Promise.all([
-      // Single pass: get totalExpense and the admin-allocated slice together
-      Expense.aggregate([
-        { $match: query },
-        {
-          $group: {
-            _id: null,
-            totalExpense: { $sum: "$amount" },
-            adminAllocatedExpense: {
-              $sum: {
-                $cond: [{ $in: ["$createdBy", adminUserIds] }, "$amount", 0],
+    // Queries scoped to approved-only (for balance calculations)
+    const approvedQuery   = { ...query,   status: "approved" };
+    const approvedAdvQuery = { ...advanceQuery };
+
+    const [expenseSummary, approvedSummary, pendingSummary, fundSummaryAgg, categoryTotals] =
+      await Promise.all([
+        // All expenses (regardless of status) — informational total
+        Expense.aggregate([
+          { $match: query },
+          {
+            $group: {
+              _id: null,
+              totalExpense: { $sum: "$amount" },
+              adminAllocatedExpense: {
+                $sum: {
+                  $cond: [{ $in: ["$createdBy", adminUserIds] }, "$amount", 0],
+                },
               },
             },
           },
-        },
-      ]),
-      // Fund total — uses advanceQuery (date + user, no category restriction)
-      // because advances have no category field.
-      // Skipped entirely for admin_personal mode (admin has no fund balance).
-      mode !== "admin_personal"
-        ? Advance.aggregate([
-            { $match: advanceQuery },
-            { $group: { _id: null, totalFunds: { $sum: "$amount" } } },
-          ])
-        : Promise.resolve([]),
-      // Category breakdown for the breakdown strip
-      Expense.aggregate([
-        { $match: query },
-        { $group: { _id: "$category", totalAmount: { $sum: "$amount" } } },
-        { $sort: { totalAmount: -1 } },
-      ]),
-    ]);
+        ]),
+        // Approved expenses only — used for remaining balance
+        Expense.aggregate([
+          { $match: approvedQuery },
+          {
+            $group: {
+              _id: null,
+              approvedExpense: { $sum: "$amount" },
+              adminAllocatedApproved: {
+                $sum: {
+                  $cond: [{ $in: ["$createdBy", adminUserIds] }, "$amount", 0],
+                },
+              },
+            },
+          },
+        ]),
+        // Pending expenses — shown as informational badge
+        Expense.aggregate([
+          { $match: { ...query, status: "pending" } },
+          { $group: { _id: null, pendingExpense: { $sum: "$amount" } } },
+        ]),
+        // Fund total — uses advanceQuery (date + user, no category restriction)
+        mode !== "admin_personal"
+          ? Advance.aggregate([
+              { $match: approvedAdvQuery },
+              { $group: { _id: null, totalFunds: { $sum: "$amount" } } },
+            ])
+          : Promise.resolve([]),
+        // Category breakdown — approved expenses only (consistent with balance)
+        Expense.aggregate([
+          { $match: approvedQuery },
+          { $group: { _id: "$category", totalAmount: { $sum: "$amount" } } },
+          { $sort: { totalAmount: -1 } },
+        ]),
+      ]);
 
     const totalExpense          = expenseSummary[0]?.totalExpense          || 0;
     const adminAllocatedExpense = expenseSummary[0]?.adminAllocatedExpense || 0;
     const managerDirectExpense  = totalExpense - adminAllocatedExpense;
+    const approvedExpense       = approvedSummary[0]?.approvedExpense      || 0;
+    const pendingExpense        = pendingSummary[0]?.pendingExpense         || 0;
     const totalFunds            = fundSummaryAgg[0]?.totalFunds            || 0;
-    // Intentionally allow negative — manager spending with empty fund goes negative
-    const remainingBalance      = totalFunds - totalExpense;
+    // Balance only counts approved expenses; intentionally allows negative
+    const remainingBalance      = totalFunds - approvedExpense;
 
     res.status(200).json({
       message: "Ledger fetched successfully",
       summary: {
         totalRecords: expensesList.length,
         totalExpense,
+        approvedExpense,
+        pendingExpense,
         managerDirectExpense,
         adminAllocatedExpense,
         totalFunds,
@@ -484,9 +521,38 @@ const deleteExpense = async (req, res) => {
   }
 };
 
+// Admin only — change approval status of an expense
+const updateExpenseStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (!["pending", "approved", "rejected"].includes(status)) {
+      return res
+        .status(400)
+        .json({ message: "Invalid status. Must be pending, approved, or rejected." });
+    }
+
+    const expense = await Expense.findByIdAndUpdate(
+      id,
+      { $set: { status } },
+      { new: true, runValidators: true },
+    );
+
+    if (!expense) {
+      return res.status(404).json({ message: "Expense not found" });
+    }
+
+    res.status(200).json({ message: "Expense status updated", data: expense });
+  } catch (error) {
+    res.status(500).json({ message: "Failed to update status", error: error.message });
+  }
+};
+
 module.exports = {
   addExpense,
   getExpenses,
   updateExpense,
+  updateExpenseStatus,
   deleteExpense,
 };

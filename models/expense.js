@@ -46,6 +46,11 @@ const expenseSchema = new mongoose.Schema(
       default: null,
     },
     serialNo: { type: Number },
+    status: {
+      type: String,
+      enum: ["pending", "approved", "rejected"],
+      default: "pending",
+    },
   },
   {
     timestamps: true,

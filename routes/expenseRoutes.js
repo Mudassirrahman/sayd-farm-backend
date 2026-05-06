@@ -5,6 +5,7 @@ const {
   addExpense,
   getExpenses,
   updateExpense,
+  updateExpenseStatus,
   deleteExpense,
 } = require("../controllers/expenseController");
 
@@ -22,6 +23,13 @@ router.put(
   roleMiddleware("admin"),
   upload.single("receipt"),
   updateExpense,
+);
+
+router.patch(
+  "/:id/status",
+  authenticateUser,
+  roleMiddleware("admin"),
+  updateExpenseStatus,
 );
 
 router.delete("/:id", authenticateUser, roleMiddleware("admin"), deleteExpense);
