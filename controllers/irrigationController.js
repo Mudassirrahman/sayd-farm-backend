@@ -35,8 +35,29 @@ const validateMaterialsInput = (materialsUsed) => {
 
 const populateIrrigation = (query) =>
   query
-    .populate("landBlock", "adminName managerName areaInAcres")
+    .populate("landBlock", "adminName managerName areaInAcres subAcres")
     .populate("createdBy", "name email role");
+
+const validateLandSelection = async (landBlockId, landSubAcre, session) => {
+  const block = await LandBlock.findById(landBlockId).session(session || null);
+  if (!block) return { error: "Acre block nahi mila" };
+
+  const subAcres = block.subAcres || [];
+  if (subAcres.length === 0) {
+    return { block, error: null };
+  }
+
+  if (!landSubAcre) {
+    return { error: "Specific acre number select karein (Acre 1, Acre 2...)" };
+  }
+
+  const found = subAcres.some((s) => String(s._id) === String(landSubAcre));
+  if (!found) {
+    return { error: "Yeh acre number is block ka nahi hai" };
+  }
+
+  return { block, error: null };
+};
 
 const validateMaterialsStock = async (materialsUsed) => {
   if (!materialsUsed?.length) return null;
@@ -118,6 +139,7 @@ const createIrrigation = async (req, res) => {
   try {
     const {
       landBlock,
+      landSubAcre,
       activityDate,
       waterSource,
       startTime,
@@ -139,10 +161,10 @@ const createIrrigation = async (req, res) => {
       return res.status(400).json({ message: materialsError });
     }
 
-    const block = await LandBlock.findById(landBlock).session(session);
-    if (!block) {
+    const landCheck = await validateLandSelection(landBlock, landSubAcre, session);
+    if (landCheck.error) {
       await session.abortTransaction();
-      return res.status(404).json({ message: "Acre block nahi mila" });
+      return res.status(400).json({ message: landCheck.error });
     }
 
     const stockError = await validateMaterialsStock(materialsUsed);
@@ -153,6 +175,7 @@ const createIrrigation = async (req, res) => {
 
     const irrigation = new Irrigation({
       landBlock,
+      landSubAcre: landSubAcre || undefined,
       activityDate: new Date(activityDate),
       waterSource,
       startTime: startTime.trim(),
@@ -204,6 +227,7 @@ const updateIrrigation = async (req, res) => {
 
     const {
       landBlock,
+      landSubAcre,
       activityDate,
       waterSource,
       startTime,
@@ -228,7 +252,19 @@ const updateIrrigation = async (req, res) => {
       return res.status(400).json({ message: stockError });
     }
 
-    existing.landBlock = landBlock || existing.landBlock;
+    const targetLandBlock = landBlock || existing.landBlock;
+    const landCheck = await validateLandSelection(
+      targetLandBlock,
+      landSubAcre !== undefined ? landSubAcre : existing.landSubAcre,
+      session
+    );
+    if (landCheck.error) {
+      await session.abortTransaction();
+      return res.status(400).json({ message: landCheck.error });
+    }
+
+    existing.landBlock = targetLandBlock;
+    existing.landSubAcre = landSubAcre !== undefined ? landSubAcre || undefined : existing.landSubAcre;
     if (activityDate) existing.activityDate = new Date(activityDate);
     if (waterSource) existing.waterSource = waterSource;
     if (startTime) existing.startTime = startTime.trim();

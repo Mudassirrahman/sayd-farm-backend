@@ -1,5 +1,16 @@
 const mongoose = require("mongoose");
 
+const subAcreSchema = new mongoose.Schema(
+  {
+    label: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+  },
+  { _id: true }
+);
+
 const landBlockSchema = new mongoose.Schema(
   {
     adminName: {
@@ -16,6 +27,10 @@ const landBlockSchema = new mongoose.Schema(
       type: Number,
       required: true,
       min: 0.01,
+    },
+    subAcres: {
+      type: [subAcreSchema],
+      default: [],
     },
   },
   { timestamps: true }

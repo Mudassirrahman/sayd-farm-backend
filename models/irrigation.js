@@ -24,6 +24,9 @@ const irrigationSchema = new mongoose.Schema(
       ref: "LandBlock",
       required: true,
     },
+    landSubAcre: {
+      type: mongoose.Schema.Types.ObjectId,
+    },
     activityDate: {
       type: Date,
       required: true,
