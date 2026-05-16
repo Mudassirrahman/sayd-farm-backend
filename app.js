@@ -10,6 +10,10 @@ const userRoutes = require("./routes/userRoutes");
 const advanceRoutes = require("./routes/advanceRoutes");
 const categoryRoutes = require("./routes/categoryRoutes");
 const taskRoutes = require("./routes/taskRoutes");
+const landBlockRoutes = require("./routes/landBlockRoutes");
+const inventoryCategoryRoutes = require("./routes/inventoryCategoryRoutes");
+const inventoryRoutes = require("./routes/inventoryRoutes");
+const irrigationRoutes = require("./routes/irrigationRoutes");
 
 const app = express();
 
@@ -40,6 +44,10 @@ app.use("/expenses", expenseRoutes);
 app.use("/advances", advanceRoutes);
 app.use("/categories", categoryRoutes);
 app.use("/tasks", taskRoutes);
+app.use("/land-blocks", landBlockRoutes);
+app.use("/inventory-categories", inventoryCategoryRoutes);
+app.use("/inventory", inventoryRoutes);
+app.use("/irrigations", irrigationRoutes);
 
 // Default route
 app.get("/", (req, res) => {
@@ -47,10 +55,10 @@ app.get("/", (req, res) => {
 });
 
 // Server (for local development)
-// const PORT = process.env.PORT || 8080;
-// app.listen(PORT, () => {
-//   console.log(`Server running on port ${PORT}`);
-// });
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
 
 // Export for Vercel serverless
- module.exports = app;
+//  module.exports = app;
