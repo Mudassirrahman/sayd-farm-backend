@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { CROP_VALUES } = require("../utils/cropConstants");
 
 const subAcreSchema = new mongoose.Schema(
   {
@@ -6,6 +7,11 @@ const subAcreSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
+    },
+    crop: {
+      type: String,
+      enum: CROP_VALUES,
+      required: true,
     },
   },
   { _id: true }

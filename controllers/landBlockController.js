@@ -1,15 +1,22 @@
 const LandBlock = require("../models/landBlock");
+const { isValidCrop } = require("../utils/cropConstants");
 
-const normalizeSubAcres = (subAcres) =>
-  (subAcres || [])
-    .map((s, i) => {
-      const label = (typeof s === "string" ? s : s?.label || "").trim();
-      if (!label) return null;
-      const entry = { label: label || `Acre ${i + 1}` };
-      if (s && s._id) entry._id = s._id;
-      return entry;
-    })
-    .filter(Boolean);
+const normalizeSubAcres = (subAcres) => {
+  const result = [];
+  for (let i = 0; i < (subAcres || []).length; i++) {
+    const s = subAcres[i];
+    const label = (typeof s === "string" ? s : s?.label || "").trim();
+    const crop = typeof s === "object" ? s?.crop : null;
+    if (!label) continue;
+    if (!isValidCrop(crop)) {
+      return { error: `${label || `Acre ${i + 1}`} ke liye fasal select karein` };
+    }
+    const entry = { label: label || `Acre ${i + 1}`, crop };
+    if (s && s._id) entry._id = s._id;
+    result.push(entry);
+  }
+  return { subAcres: result };
+};
 
 const getLandBlocks = async (req, res) => {
   try {
@@ -31,8 +38,11 @@ const createLandBlock = async (req, res) => {
       return res.status(400).json({ message: "Admin naam aur manager naam dono zaroori hain" });
     }
 
-    const normalizedSubAcres = normalizeSubAcres(subAcres);
-    if (!normalizedSubAcres.length) {
+    const normalized = normalizeSubAcres(subAcres);
+    if (normalized.error) {
+      return res.status(400).json({ message: normalized.error });
+    }
+    if (!normalized.subAcres.length) {
       return res.status(400).json({
         message: "Kam az kam ek acre number add karein (jaise Acre 1, Acre 2...)",
       });
@@ -41,8 +51,8 @@ const createLandBlock = async (req, res) => {
     const block = new LandBlock({
       adminName: adminName.trim(),
       managerName: managerName.trim(),
-      areaInAcres: normalizedSubAcres.length,
-      subAcres: normalizedSubAcres,
+      areaInAcres: normalized.subAcres.length,
+      subAcres: normalized.subAcres,
     });
     await block.save();
     res.status(201).json({ message: "Acre block add ho gaya", landBlock: block });
@@ -65,8 +75,11 @@ const updateLandBlock = async (req, res) => {
       return res.status(404).json({ message: "Acre block nahi mila" });
     }
 
-    const normalizedSubAcres = normalizeSubAcres(subAcres);
-    if (!normalizedSubAcres.length) {
+    const normalized = normalizeSubAcres(subAcres);
+    if (normalized.error) {
+      return res.status(400).json({ message: normalized.error });
+    }
+    if (!normalized.subAcres.length) {
       return res.status(400).json({
         message: "Kam az kam ek acre number add karein (jaise Acre 1, Acre 2...)",
       });
@@ -95,8 +108,8 @@ const updateLandBlock = async (req, res) => {
       {
         adminName: adminName.trim(),
         managerName: managerName.trim(),
-        areaInAcres: normalizedSubAcres.length,
-        subAcres: normalizedSubAcres,
+        areaInAcres: normalized.subAcres.length,
+        subAcres: normalized.subAcres,
       },
       { new: true, runValidators: true }
     );
