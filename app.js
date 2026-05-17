@@ -17,7 +17,7 @@ const irrigationRoutes = require("./routes/irrigationRoutes");
 
 const app = express();
 
-// Load environment variables  
+// Load environment variables   
 dotenv.config();
 
 // Connect to MongoDB 
