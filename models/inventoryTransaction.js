@@ -7,8 +7,27 @@ const inventoryTransactionSchema = new mongoose.Schema(
       enum: ["in", "out"],
       required: true,
     },
+    inReason: {
+      type: String,
+      enum: ["purchase", "godam_return"],
+    },
+    outReason: {
+      type: String,
+      enum: ["godam_exit", "field_use"],
+    },
     receivedDate: {
       type: Date,
+    },
+    issuedDate: {
+      type: Date,
+    },
+    returnDate: {
+      type: Date,
+    },
+    issuedTo: {
+      type: String,
+      trim: true,
+      default: "",
     },
     itemName: {
       type: String,
@@ -32,7 +51,7 @@ const inventoryTransactionSchema = new mongoose.Schema(
     },
     containerType: {
       type: String,
-      enum: ["bag", "bottle", "drum", "kg", "liter", "other"],
+      enum: ["bag", "bottle", "drum", "packet", "kg", "liter", "other"],
       default: "bag",
     },
     containerCount: {
@@ -47,7 +66,7 @@ const inventoryTransactionSchema = new mongoose.Schema(
     },
     contentUnit: {
       type: String,
-      enum: ["kg", "ml", "liter", "unit"],
+      enum: ["kg", "g", "ml", "liter", "unit"],
       default: "kg",
     },
     totalQuantity: {

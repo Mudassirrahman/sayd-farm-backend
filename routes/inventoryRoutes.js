@@ -4,12 +4,30 @@ const {
   getStockSummary,
   getTransactions,
   createStockIn,
+  updateStockIn,
+  deleteStockIn,
+  createGodamOut,
+  updateGodamOut,
+  deleteGodamOut,
+  createGodamReturn,
+  getReconciliation,
 } = require("../controllers/inventoryController");
 const authenticateUser = require("../middleware/authMiddleware");
 const roleMiddleware = require("../middleware/roleMiddleware");
+const rolesMiddleware = require("../middleware/rolesMiddleware");
 
 router.get("/stock-summary", authenticateUser, getStockSummary);
+router.get("/reconciliation", authenticateUser, roleMiddleware("admin"), getReconciliation);
 router.get("/transactions", authenticateUser, getTransactions);
+
 router.post("/transactions", authenticateUser, roleMiddleware("admin"), createStockIn);
+router.put("/transactions/:id", authenticateUser, roleMiddleware("admin"), updateStockIn);
+router.delete("/transactions/:id", authenticateUser, roleMiddleware("admin"), deleteStockIn);
+
+router.post("/godam-out", authenticateUser, roleMiddleware("admin"), createGodamOut);
+router.put("/godam-out/:id", authenticateUser, roleMiddleware("admin"), updateGodamOut);
+router.delete("/godam-out/:id", authenticateUser, roleMiddleware("admin"), deleteGodamOut);
+
+router.post("/godam-return", authenticateUser, rolesMiddleware("admin", "manager"), createGodamReturn);
 
 module.exports = router;

@@ -82,6 +82,7 @@ const createOutTransactions = async (irrigationId, materialsUsed, userId, sessio
     const stockKey = mat.stockKey || buildStockKey(mat);
     const txn = new InventoryTransaction({
       type: "out",
+      outReason: "field_use",
       itemName: mat.itemName,
       category: mat.category,
       subcategory: mat.subcategory || "",
@@ -106,7 +107,14 @@ const createOutTransactions = async (irrigationId, materialsUsed, userId, sessio
 
 const deleteOutTransactions = async (irrigationId, session) => {
   const opts = session ? { session } : {};
-  await InventoryTransaction.deleteMany({ irrigation: irrigationId, type: "out" }, opts);
+  await InventoryTransaction.deleteMany(
+    {
+      irrigation: irrigationId,
+      type: "out",
+      $or: [{ outReason: "field_use" }, { outReason: { $exists: false } }, { outReason: null }],
+    },
+    opts
+  );
 };
 
 const getIrrigations = async (req, res) => {
