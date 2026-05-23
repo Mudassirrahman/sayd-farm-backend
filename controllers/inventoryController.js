@@ -6,6 +6,10 @@ const {
   getPendingReturnForKey,
   metricsFromAgg,
   stockMetricsGroup,
+  isPurchaseIn,
+  isGodamReturn,
+  isGodamExit,
+  isFieldUse,
 } = require("../utils/inventoryUtils");
 const {
   computeTotalQuantity,
@@ -522,6 +526,139 @@ const createGodamReturn = async (req, res) => {
   }
 };
 
+const getTime = (value) => {
+  const t = value ? new Date(value).getTime() : NaN;
+  return Number.isFinite(t) ? t : 0;
+};
+
+const mapTransactionToLedgerRow = (txn) => {
+  const isIn = txn.type === "in";
+  const isReturn = isIn && isGodamReturn(txn.inReason);
+  const isPurchase = isIn && isPurchaseIn(txn.inReason);
+  const isExit = txn.type === "out" && isGodamExit(txn.outReason);
+  const isUse = txn.type === "out" && isFieldUse(txn.outReason, txn.irrigation);
+
+  let typeName = "Out";
+  if (isPurchase) typeName = "Stock In";
+  else if (isReturn) typeName = "Wapis Jama";
+  else if (isExit) typeName = "Godam Out";
+  else if (isUse) typeName = "Field Use";
+
+  let transactionDate = txn.createdAt;
+  if (isPurchase) transactionDate = txn.receivedDate || txn.createdAt;
+  else if (isReturn) transactionDate = txn.returnDate || txn.createdAt;
+  else transactionDate = txn.issuedDate || txn.createdAt;
+
+  const qty = Number(txn.totalQuantity) || 0;
+  const creditIn = isIn ? qty : 0;
+  const debitOut = !isIn ? qty : 0;
+
+  const descParts = [];
+  if (txn.notes?.trim()) descParts.push(txn.notes.trim());
+  if (txn.issuedTo?.trim()) descParts.push(`Issued to: ${txn.issuedTo.trim()}`);
+
+  return {
+    _id: txn._id,
+    rowType: typeName,
+    typeName,
+    transactionDate,
+    entryDate: txn.createdAt,
+    addedBy: txn.createdBy?.name || "Unknown",
+    itemName: txn.itemName,
+    itemDescription: descParts.length ? descParts.join(" — ") : null,
+    category: txn.category,
+    subCategory: txn.subcategory || null,
+    brand: txn.brand || null,
+    contentUnit: txn.contentUnit,
+    stockKey: txn.stockKey,
+    debitOut,
+    creditIn,
+    packagingDisplay: formatPackagingLine(txn),
+    primaryDate: transactionDate,
+    createdAt: txn.createdAt,
+    affectsGodamBalance: isPurchase || isReturn || isExit,
+  };
+};
+
+const getInventoryLedger = async (req, res) => {
+  try {
+    const { stockKey } = req.query;
+    const filter = stockKey ? { stockKey } : {};
+
+    const transactions = await InventoryTransaction.find(filter)
+      .populate("createdBy", "name email role")
+      .populate("irrigation", "activityDate")
+      .lean();
+
+    let mergedList = transactions.map(mapTransactionToLedgerRow);
+
+    mergedList.sort((a, b) => {
+      const dateDiff = getTime(a.primaryDate) - getTime(b.primaryDate);
+      if (dateDiff !== 0) return dateDiff;
+      const createdDiff = getTime(a.createdAt) - getTime(b.createdAt);
+      if (createdDiff !== 0) return createdDiff;
+      if (a.creditIn > 0 && b.debitOut > 0) return -1;
+      if (a.debitOut > 0 && b.creditIn > 0) return 1;
+      return 0;
+    });
+
+    const sortedByCreatedAt = [...mergedList].sort(
+      (a, b) => getTime(a.createdAt) - getTime(b.createdAt)
+    );
+    let globalSr = 0;
+    const srMap = new Map();
+    sortedByCreatedAt.forEach((item) => {
+      globalSr += 1;
+      srMap.set(item._id.toString(), globalSr);
+    });
+    mergedList = mergedList.map((item) => ({
+      ...item,
+      srNumber: srMap.get(item._id.toString()),
+    }));
+
+    const balanceByKey = new Map();
+    mergedList = mergedList.map((item) => {
+      const prev = balanceByKey.get(item.stockKey) || 0;
+      let next = prev;
+      if (item.affectsGodamBalance) {
+        next = prev + item.creditIn - item.debitOut;
+      }
+      balanceByKey.set(item.stockKey, next);
+      return { ...item, balance: next };
+    });
+
+    mergedList.sort((a, b) => b.srNumber - a.srNumber);
+
+    const ledger = mergedList.map((item) => ({
+      _id: item._id,
+      srNumber: item.srNumber,
+      transactionDate: item.transactionDate,
+      entryDate: item.entryDate,
+      typeName: item.typeName,
+      addedBy: item.addedBy,
+      itemName: item.itemName,
+      itemDescription: item.itemDescription,
+      category: item.category,
+      subCategory: item.subCategory,
+      brand: item.brand,
+      contentUnit: item.contentUnit,
+      stockKey: item.stockKey,
+      packagingDisplay: item.packagingDisplay,
+      debitOut: item.debitOut,
+      creditIn: item.creditIn,
+      balance: item.balance,
+      rowType: item.rowType,
+    }));
+
+    res.status(200).json({ ledger });
+  } catch (error) {
+    res.status(500).json({
+      message: "Inventory ledger fetch karne mein masla aaya",
+      error: error.message,
+    });
+  }
+};
+
 const getReconciliation = async (req, res) => {
   try {
     const hours = Number(req.query.hours) || 24;
@@ -613,6 +750,7 @@ const getReconciliation = async (req, res) => {
 
 module.exports = {
   getStockSummary,
+  getInventoryLedger,
   getTransactions,
   createStockIn,
   updateStockIn,

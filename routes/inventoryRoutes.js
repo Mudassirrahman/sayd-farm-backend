@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const {
   getStockSummary,
+  getInventoryLedger,
   getTransactions,
   createStockIn,
   updateStockIn,
@@ -17,6 +18,7 @@ const roleMiddleware = require("../middleware/roleMiddleware");
 const rolesMiddleware = require("../middleware/rolesMiddleware");
 
 router.get("/stock-summary", authenticateUser, getStockSummary);
+router.get("/ledger", authenticateUser, getInventoryLedger);
 router.get("/reconciliation", authenticateUser, roleMiddleware("admin"), getReconciliation);
 router.get("/transactions", authenticateUser, getTransactions);
 
