@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 const Irrigation = require("../models/irrigation");
 const InventoryTransaction = require("../models/inventoryTransaction");
 const LandBlock = require("../models/landBlock");
-const { buildStockKey, getRemainingForKey } = require("../utils/inventoryUtils");
+const { buildStockKey, getPendingReturnForKey } = require("../utils/inventoryUtils");
 const { isKhaadCategory } = require("../utils/categoryUtils");
 
 const mapMaterial = (m) => {
@@ -68,9 +68,9 @@ const validateMaterialsStock = async (materialsUsed) => {
       return `Miqdar sahi nahi: ${mat.itemName || "item"}`;
     }
     const stockKey = mat.stockKey || buildStockKey(mat);
-    const remaining = await getRemainingForKey(stockKey);
-    if (qty > remaining + 0.0001) {
-      return `${mat.itemName} ke liye stock kam hai. Baqi: ${remaining} ${mat.contentUnit || "kg"}`;
+    const available = await getPendingReturnForKey(stockKey);
+    if (qty > available + 0.0001) {
+      return `${mat.itemName} ke liye godam se nikla stock kam hai. Use ke liye baqi: ${available} ${mat.contentUnit || "kg"}`;
     }
   }
   return null;
