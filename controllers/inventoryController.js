@@ -21,7 +21,11 @@ const MIN_OUT_PURPOSE_LENGTH = 15;
 
 const purchaseInFilter = {
   type: "in",
-  $or: [{ inReason: { $exists: false } }, { inReason: null }, { inReason: "purchase" }],
+  $or: [
+    { inReason: { $exists: false } },
+    { inReason: null },
+    { inReason: "purchase" },
+  ],
 };
 
 const buildTxnPayload = (body) => {
@@ -41,7 +45,7 @@ const buildTxnPayload = (body) => {
   const { total, contentUnit: unit } = computeTotalQuantity(
     containerCount,
     contentPerContainer,
-    contentUnit
+    contentUnit,
   );
 
   const stockKey = buildStockKey({
@@ -87,7 +91,11 @@ const buildGodamOutPayload = (body) => {
   let unit = contentUnit || "kg";
 
   if (!total || total <= 0) {
-    const computed = computeTotalQuantity(containerCount, contentPerContainer, contentUnit);
+    const computed = computeTotalQuantity(
+      containerCount,
+      contentPerContainer,
+      contentUnit,
+    );
     total = computed.total;
     unit = computed.contentUnit;
   }
@@ -97,7 +105,8 @@ const buildGodamOutPayload = (body) => {
   }
 
   if (!issuedDate) return { error: "Nikalne ki date zaroori hai" };
-  if (!issuedTo?.trim()) return { error: "Kis ne liya — yeh likhna zaroori hai" };
+  if (!issuedTo?.trim())
+    return { error: "Kis ne liya — yeh likhna zaroori hai" };
 
   const purpose = notes?.trim() || "";
   if (purpose.length < MIN_OUT_PURPOSE_LENGTH) {
@@ -144,7 +153,7 @@ const validateStockInBody = (body) => {
   const { total } = computeTotalQuantity(
     body.containerCount,
     body.contentPerContainer,
-    body.contentUnit
+    body.contentUnit,
   );
   if (total <= 0) {
     return "Miqdar sahi likhein (count × per packet/bag, ya direct qty)";
@@ -201,18 +210,144 @@ const getStockSummary = async (req, res) => {
 
     res.status(200).json({ stockSummary: enriched });
   } catch (error) {
-    res.status(500).json({ message: "Stock summary fetch karne mein masla aaya", error: error.message });
+    res
+      .status(500)
+      .json({
+        message: "Stock summary fetch karne mein masla aaya",
+        error: error.message,
+      });
   }
+};
+
+const getTime = (value) => {
+  const t = value ? new Date(value).getTime() : NaN;
+  return Number.isFinite(t) ? t : 0;
+};
+
+const endOfDayTime = (dateStr) => {
+  const d = new Date(dateStr);
+  d.setUTCHours(23, 59, 59, 999);
+  return d.getTime();
+};
+
+const applyDateRangeToFilter = (filter, field, startDate, endDate) => {
+  if (!startDate && !endDate) return;
+  filter[field] = {};
+  if (startDate) filter[field].$gte = new Date(startDate);
+  if (endDate) {
+    const end = new Date(endDate);
+    end.setUTCHours(23, 59, 59, 999);
+    filter[field].$lte = end;
+  }
+};
+
+/** Partial match across item line + notes columns (query param: itemName / itemSearch). */
+const buildMultiFieldTextSearch = (queryText) => {
+  const q = queryText?.trim();
+  if (!q) return null;
+  const rx = { $regex: q, $options: "i" };
+  return {
+    $or: [
+      { itemName: rx },
+      { brand: rx },
+      { subcategory: rx },
+      { category: rx },
+      { notes: rx },
+      { issuedTo: rx },
+    ],
+  };
+};
+
+const rowMatchesInventorySearch = (row, queryText) => {
+  const q = queryText?.trim().toLowerCase();
+  if (!q) return true;
+  const parts = [
+    row.itemName,
+    row.brand,
+    row.subCategory ?? row.subcategory,
+    row.category,
+    row.itemDescription,
+    row.notes,
+    row.issuedTo,
+    row.typeName,
+    row.addedBy,
+    row.packagingDisplay,
+  ];
+  return parts.some((p) => p && String(p).toLowerCase().includes(q));
+};
+
+const applyLedgerDisplayFilters = (ledger, query) => {
+  let rows = ledger;
+  const {
+    startDate,
+    endDate,
+    entryStartDate,
+    entryEndDate,
+    category,
+    typeName,
+    createdBy,
+    itemName,
+  } = query;
+
+  if (startDate) {
+    rows = rows.filter((r) => getTime(r.transactionDate) >= getTime(startDate));
+  }
+  if (endDate) {
+    rows = rows.filter(
+      (r) => getTime(r.transactionDate) <= endOfDayTime(endDate),
+    );
+  }
+  if (entryStartDate) {
+    rows = rows.filter((r) => getTime(r.entryDate) >= getTime(entryStartDate));
+  }
+  if (entryEndDate) {
+    rows = rows.filter(
+      (r) => getTime(r.entryDate) <= endOfDayTime(entryEndDate),
+    );
+  }
+  if (category) {
+    rows = rows.filter((r) => r.category === category);
+  }
+  if (typeName) {
+    rows = rows.filter((r) => r.typeName === typeName);
+  }
+  if (createdBy) {
+    rows = rows.filter((r) => r.createdById === createdBy);
+  }
+  if (itemName?.trim()) {
+    rows = rows.filter((r) => rowMatchesInventorySearch(r, itemName));
+  }
+  return rows;
 };
 
 const getTransactions = async (req, res) => {
   try {
-    const { type, inReason, outReason } = req.query;
+    const {
+      type,
+      inReason,
+      outReason,
+      startDate,
+      endDate,
+      entryStartDate,
+      entryEndDate,
+      category,
+      subcategory,
+      createdBy,
+      itemName,
+    } = req.query;
     const filter = {};
+    const andParts = [];
+
     if (type === "in" || type === "out") filter.type = type;
     if (inReason === "purchase") {
       filter.type = "in";
-      filter.$or = [{ inReason: { $exists: false } }, { inReason: null }, { inReason: "purchase" }];
+      andParts.push({
+        $or: [
+          { inReason: { $exists: false } },
+          { inReason: null },
+          { inReason: "purchase" },
+        ],
+      });
     } else if (inReason === "godam_return") {
       filter.type = "in";
       filter.inReason = "godam_return";
@@ -221,6 +356,23 @@ const getTransactions = async (req, res) => {
       filter.type = "out";
       filter.outReason = outReason;
     }
+
+    let businessDateField = "createdAt";
+    if (inReason === "purchase") businessDateField = "receivedDate";
+    else if (inReason === "godam_return") businessDateField = "returnDate";
+    else if (outReason === "godam_exit" || outReason === "field_use")
+      businessDateField = "issuedDate";
+
+    applyDateRangeToFilter(filter, businessDateField, startDate, endDate);
+    applyDateRangeToFilter(filter, "createdAt", entryStartDate, entryEndDate);
+
+    if (category) filter.category = category;
+    if (subcategory) filter.subcategory = subcategory;
+    if (createdBy) filter.createdBy = new mongoose.Types.ObjectId(createdBy);
+
+    const textSearch = buildMultiFieldTextSearch(itemName);
+    if (textSearch) andParts.push(textSearch);
+    if (andParts.length) filter.$and = andParts;
 
     const transactions = await InventoryTransaction.find(filter)
       .populate("createdBy", "name email role")
@@ -235,7 +387,12 @@ const getTransactions = async (req, res) => {
 
     res.status(200).json({ transactions: enriched });
   } catch (error) {
-    res.status(500).json({ message: "Transactions fetch karne mein masla aaya", error: error.message });
+    res
+      .status(500)
+      .json({
+        message: "Transactions fetch karne mein masla aaya",
+        error: error.message,
+      });
   }
 };
 
@@ -255,9 +412,16 @@ const createStockIn = async (req, res) => {
 
     await txn.save();
     const populated = await txn.populate("createdBy", "name email");
-    res.status(201).json({ message: "Stock add ho gaya", transaction: populated });
+    res
+      .status(201)
+      .json({ message: "Stock add ho gaya", transaction: populated });
   } catch (error) {
-    res.status(500).json({ message: "Stock add karne mein masla aaya", error: error.message });
+    res
+      .status(500)
+      .json({
+        message: "Stock add karne mein masla aaya",
+        error: error.message,
+      });
   }
 };
 
@@ -268,7 +432,11 @@ const updateStockIn = async (req, res) => {
     if (err) return res.status(400).json({ message: err });
 
     const existing = await InventoryTransaction.findById(id);
-    if (!existing || existing.type !== "in" || existing.inReason === "godam_return") {
+    if (
+      !existing ||
+      existing.type !== "in" ||
+      existing.inReason === "godam_return"
+    ) {
       return res.status(404).json({ message: "Stock record nahi mila" });
     }
 
@@ -281,7 +449,8 @@ const updateStockIn = async (req, res) => {
     if (payload.stockKey !== oldKey) {
       if (outOld > 0.0001) {
         return res.status(400).json({
-          message: "Item/category/brand change nahi ho sakta — stock godam se nikal chuka hai",
+          message:
+            "Item/category/brand change nahi ho sakta — stock godam se nikal chuka hai",
         });
       }
     } else if (otherInOld + payload.totalQuantity < outOld - 0.0001) {
@@ -294,7 +463,9 @@ const updateStockIn = async (req, res) => {
       const inNew = await sumPurchaseInForKey(payload.stockKey);
       const outNew = await sumGodamOut(payload.stockKey);
       if (inNew + payload.totalQuantity < outNew - 0.0001) {
-        return res.status(400).json({ message: "Nayi item line par stock balance theek nahi" });
+        return res
+          .status(400)
+          .json({ message: "Nayi item line par stock balance theek nahi" });
       }
     }
 
@@ -303,9 +474,16 @@ const updateStockIn = async (req, res) => {
     await existing.save();
 
     const populated = await existing.populate("createdBy", "name email");
-    res.status(200).json({ message: "Stock update ho gaya", transaction: populated });
+    res
+      .status(200)
+      .json({ message: "Stock update ho gaya", transaction: populated });
   } catch (error) {
-    res.status(500).json({ message: "Stock update karne mein masla aaya", error: error.message });
+    res
+      .status(500)
+      .json({
+        message: "Stock update karne mein masla aaya",
+        error: error.message,
+      });
   }
 };
 
@@ -344,11 +522,18 @@ const deleteStockIn = async (req, res) => {
     const { id } = req.params;
 
     const existing = await InventoryTransaction.findById(id);
-    if (!existing || existing.type !== "in" || existing.inReason === "godam_return") {
+    if (
+      !existing ||
+      existing.type !== "in" ||
+      existing.inReason === "godam_return"
+    ) {
       return res.status(404).json({ message: "Stock record nahi mila" });
     }
 
-    const otherInSum = await sumPurchaseInExcept(existing.stockKey, existing._id);
+    const otherInSum = await sumPurchaseInExcept(
+      existing.stockKey,
+      existing._id,
+    );
     const outSum = await sumGodamOut(existing.stockKey);
 
     if (otherInSum < outSum - 0.0001) {
@@ -360,14 +545,21 @@ const deleteStockIn = async (req, res) => {
     await existing.deleteOne();
     res.status(200).json({ message: "Stock record delete ho gaya" });
   } catch (error) {
-    res.status(500).json({ message: "Stock delete karne mein masla aaya", error: error.message });
+    res
+      .status(500)
+      .json({
+        message: "Stock delete karne mein masla aaya",
+        error: error.message,
+      });
   }
 };
 
 const createGodamOut = async (req, res) => {
   try {
     if (!req.body.itemName?.trim() || !req.body.category?.trim()) {
-      return res.status(400).json({ message: "Item naam aur category zaroori hain" });
+      return res
+        .status(400)
+        .json({ message: "Item naam aur category zaroori hain" });
     }
 
     const built = buildGodamOutPayload(req.body);
@@ -386,9 +578,19 @@ const createGodamOut = async (req, res) => {
     });
     await txn.save();
     const populated = await txn.populate("createdBy", "name email");
-    res.status(201).json({ message: "Godam se nikalne ka record save ho gaya", transaction: populated });
+    res
+      .status(201)
+      .json({
+        message: "Godam se nikalne ka record save ho gaya",
+        transaction: populated,
+      });
   } catch (error) {
-    res.status(500).json({ message: "Godam Out save karne mein masla aaya", error: error.message });
+    res
+      .status(500)
+      .json({
+        message: "Godam Out save karne mein masla aaya",
+        error: error.message,
+      });
   }
 };
 
@@ -396,7 +598,11 @@ const updateGodamOut = async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await InventoryTransaction.findById(id);
-    if (!existing || existing.type !== "out" || existing.outReason !== "godam_exit") {
+    if (
+      !existing ||
+      existing.type !== "out" ||
+      existing.outReason !== "godam_exit"
+    ) {
       return res.status(404).json({ message: "Godam Out record nahi mila" });
     }
 
@@ -405,22 +611,34 @@ const updateGodamOut = async (req, res) => {
 
     const metrics = await getMetricsForKey(built.payload.stockKey);
     const otherGodamOut =
-      metrics.godamOut - (existing.stockKey === built.payload.stockKey ? existing.totalQuantity : 0);
+      metrics.godamOut -
+      (existing.stockKey === built.payload.stockKey
+        ? existing.totalQuantity
+        : 0);
     const atGodamIfChanged =
       built.payload.stockKey === existing.stockKey
         ? metrics.purchaseIn - otherGodamOut + metrics.godamReturn
         : metrics.atGodam + existing.totalQuantity;
 
     if (built.payload.totalQuantity > atGodamIfChanged + 0.0001) {
-      return res.status(400).json({ message: "Godam mein itni miqdar baqi nahi" });
+      return res
+        .status(400)
+        .json({ message: "Godam mein itni miqdar baqi nahi" });
     }
 
     Object.assign(existing, built.payload);
     await existing.save();
     const populated = await existing.populate("createdBy", "name email");
-    res.status(200).json({ message: "Godam Out update ho gaya", transaction: populated });
+    res
+      .status(200)
+      .json({ message: "Godam Out update ho gaya", transaction: populated });
   } catch (error) {
-    res.status(500).json({ message: "Godam Out update karne mein masla aaya", error: error.message });
+    res
+      .status(500)
+      .json({
+        message: "Godam Out update karne mein masla aaya",
+        error: error.message,
+      });
   }
 };
 
@@ -428,7 +646,11 @@ const deleteGodamOut = async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await InventoryTransaction.findById(id);
-    if (!existing || existing.type !== "out" || existing.outReason !== "godam_exit") {
+    if (
+      !existing ||
+      existing.type !== "out" ||
+      existing.outReason !== "godam_exit"
+    ) {
       return res.status(404).json({ message: "Godam Out record nahi mila" });
     }
 
@@ -437,14 +659,20 @@ const deleteGodamOut = async (req, res) => {
     const usedAfterDelete = metrics.fieldUse + metrics.godamReturn;
     if (godamOutAfter < usedAfterDelete - 0.0001) {
       return res.status(400).json({
-        message: "Delete nahi ho sakta — is issue ke baad field use ya wapis jama ho chuka hai",
+        message:
+          "Delete nahi ho sakta — is issue ke baad field use ya wapis jama ho chuka hai",
       });
     }
 
     await existing.deleteOne();
     res.status(200).json({ message: "Godam Out record delete ho gaya" });
   } catch (error) {
-    res.status(500).json({ message: "Godam Out delete karne mein masla aaya", error: error.message });
+    res
+      .status(500)
+      .json({
+        message: "Godam Out delete karne mein masla aaya",
+        error: error.message,
+      });
   }
 };
 
@@ -465,9 +693,14 @@ const createGodamReturn = async (req, res) => {
     } = req.body;
 
     if (!itemName?.trim() || !category?.trim()) {
-      return res.status(400).json({ message: "Item naam aur category zaroori hain" });
+      return res
+        .status(400)
+        .json({ message: "Item naam aur category zaroori hain" });
     }
-    if (!returnDate) return res.status(400).json({ message: "Wapis jama ki date zaroori hai" });
+    if (!returnDate)
+      return res
+        .status(400)
+        .json({ message: "Wapis jama ki date zaroori hai" });
 
     const description = notes?.trim() || "";
     if (description.length < MIN_RETURN_DESCRIPTION_LENGTH) {
@@ -479,11 +712,16 @@ const createGodamReturn = async (req, res) => {
     let total = Number(totalQuantity);
     let unit = contentUnit || "kg";
     if (!total || total <= 0) {
-      const computed = computeTotalQuantity(containerCount, contentPerContainer, contentUnit);
+      const computed = computeTotalQuantity(
+        containerCount,
+        contentPerContainer,
+        contentUnit,
+      );
       total = computed.total;
       unit = computed.contentUnit;
     }
-    if (total <= 0) return res.status(400).json({ message: "Miqdar sahi likhein" });
+    if (total <= 0)
+      return res.status(400).json({ message: "Miqdar sahi likhein" });
 
     const stockKey = buildStockKey({ itemName, category, subcategory, brand });
     const pending = await getPendingReturnForKey(stockKey);
@@ -520,15 +758,20 @@ const createGodamReturn = async (req, res) => {
 
     await txn.save();
     const populated = await txn.populate("createdBy", "name email role");
-    res.status(201).json({ message: "Godam mein wapis jama ho gaya", transaction: populated });
+    res
+      .status(201)
+      .json({
+        message: "Godam mein wapis jama ho gaya",
+        transaction: populated,
+      });
   } catch (error) {
-    res.status(500).json({ message: "Wapis jama karne mein masla aaya", error: error.message });
+    res
+      .status(500)
+      .json({
+        message: "Wapis jama karne mein masla aaya",
+        error: error.message,
+      });
   }
-};
-
-const getTime = (value) => {
-  const t = value ? new Date(value).getTime() : NaN;
-  return Number.isFinite(t) ? t : 0;
 };
 
 const mapTransactionToLedgerRow = (txn) => {
@@ -564,6 +807,8 @@ const mapTransactionToLedgerRow = (txn) => {
     transactionDate,
     entryDate: txn.createdAt,
     addedBy: txn.createdBy?.name || "Unknown",
+    createdById:
+      txn.createdBy?._id?.toString() || txn.createdBy?.toString() || null,
     itemName: txn.itemName,
     itemDescription: descParts.length ? descParts.join(" — ") : null,
     category: txn.category,
@@ -603,7 +848,7 @@ const getInventoryLedger = async (req, res) => {
     });
 
     const sortedByCreatedAt = [...mergedList].sort(
-      (a, b) => getTime(a.createdAt) - getTime(b.createdAt)
+      (a, b) => getTime(a.createdAt) - getTime(b.createdAt),
     );
     let globalSr = 0;
     const srMap = new Map();
@@ -629,26 +874,30 @@ const getInventoryLedger = async (req, res) => {
 
     mergedList.sort((a, b) => b.srNumber - a.srNumber);
 
-    const ledger = mergedList.map((item) => ({
-      _id: item._id,
-      srNumber: item.srNumber,
-      transactionDate: item.transactionDate,
-      entryDate: item.entryDate,
-      typeName: item.typeName,
-      addedBy: item.addedBy,
-      itemName: item.itemName,
-      itemDescription: item.itemDescription,
-      category: item.category,
-      subCategory: item.subCategory,
-      brand: item.brand,
-      contentUnit: item.contentUnit,
-      stockKey: item.stockKey,
-      packagingDisplay: item.packagingDisplay,
-      debitOut: item.debitOut,
-      creditIn: item.creditIn,
-      balance: item.balance,
-      rowType: item.rowType,
-    }));
+    const ledger = applyLedgerDisplayFilters(
+      mergedList.map((item) => ({
+        _id: item._id,
+        srNumber: item.srNumber,
+        transactionDate: item.transactionDate,
+        entryDate: item.entryDate,
+        typeName: item.typeName,
+        addedBy: item.addedBy,
+        createdById: item.createdById,
+        itemName: item.itemName,
+        itemDescription: item.itemDescription,
+        category: item.category,
+        subCategory: item.subCategory,
+        brand: item.brand,
+        contentUnit: item.contentUnit,
+        stockKey: item.stockKey,
+        packagingDisplay: item.packagingDisplay,
+        debitOut: item.debitOut,
+        creditIn: item.creditIn,
+        balance: item.balance,
+        rowType: item.rowType,
+      })),
+      req.query,
+    );
 
     res.status(200).json({ ledger });
   } catch (error) {
@@ -689,7 +938,12 @@ const getReconciliation = async (req, res) => {
                 {
                   $or: [
                     { $eq: ["$outReason", "field_use"] },
-                    { $and: [{ $eq: ["$type", "out"] }, { $ifNull: ["$irrigation", false] }] },
+                    {
+                      $and: [
+                        { $eq: ["$type", "out"] },
+                        { $ifNull: ["$irrigation", false] },
+                      ],
+                    },
                   ],
                 },
                 "$createdAt",
@@ -713,12 +967,12 @@ const getReconciliation = async (req, res) => {
       const reasons = [];
       if (m.pendingIssue > 0.0001) {
         reasons.push(
-          `${m.pendingIssue} ${row.contentUnit || "unit"} nikla lekin use/wapis nahi hua`
+          `${m.pendingIssue} ${row.contentUnit || "unit"} nikla lekin use/wapis nahi hua`,
         );
       }
       if (m.unissuedUse > 0.0001) {
         reasons.push(
-          `${m.unissuedUse} ${row.contentUnit || "unit"} field par use bina godam issue ke`
+          `${m.unissuedUse} ${row.contentUnit || "unit"} field par use bina godam issue ke`,
         );
       }
 
@@ -736,7 +990,9 @@ const getReconciliation = async (req, res) => {
         unissuedUse: m.unissuedUse,
         atGodam: m.atGodam,
         oldestEvent,
-        hoursOpen: Math.round((Date.now() - new Date(oldestEvent)) / (60 * 60 * 1000)),
+        hoursOpen: Math.round(
+          (Date.now() - new Date(oldestEvent)) / (60 * 60 * 1000),
+        ),
         message: reasons.join(" | "),
       });
     }
@@ -744,7 +1000,12 @@ const getReconciliation = async (req, res) => {
     alerts.sort((a, b) => new Date(a.oldestEvent) - new Date(b.oldestEvent));
     res.status(200).json({ alerts, hoursThreshold: hours });
   } catch (error) {
-    res.status(500).json({ message: "Reconciliation fetch karne mein masla aaya", error: error.message });
+    res
+      .status(500)
+      .json({
+        message: "Reconciliation fetch karne mein masla aaya",
+        error: error.message,
+      });
   }
 };
 
