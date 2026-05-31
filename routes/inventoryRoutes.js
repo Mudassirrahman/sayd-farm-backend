@@ -22,7 +22,7 @@ router.get("/ledger", authenticateUser, getInventoryLedger);
 router.get("/reconciliation", authenticateUser, roleMiddleware("admin"), getReconciliation);
 router.get("/transactions", authenticateUser, getTransactions);
 
-router.post("/transactions", authenticateUser, roleMiddleware("admin"), createStockIn);
+router.post("/transactions", authenticateUser, rolesMiddleware("admin", "user"), createStockIn);
 router.put("/transactions/:id", authenticateUser, roleMiddleware("admin"), updateStockIn);
 router.delete("/transactions/:id", authenticateUser, roleMiddleware("admin"), deleteStockIn);
 
