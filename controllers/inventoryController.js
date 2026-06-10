@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const InventoryTransaction = require("../models/inventoryTransaction");
+const Expense = require("../models/expense");
 const {
   buildStockKey,
   getMetricsForKey,
@@ -15,6 +16,19 @@ const {
   computeTotalQuantity,
   formatPackagingLine,
 } = require("../utils/inventoryUnits");
+const {
+  ensureCostingInitialized,
+  allocateLotsForGodamOut,
+  reverseLotAllocations,
+  applyWapisToGodamOuts,
+  initializePurchaseLot,
+  getPendingGodamOutBatches,
+  weightedUnitCostFromLots,
+  roundQty,
+  roundMoney,
+  EPS,
+  CROP_LABELS,
+} = require("../utils/inventoryCosting");
 
 const MIN_RETURN_DESCRIPTION_LENGTH = 20;
 const MIN_OUT_PURPOSE_LENGTH = 15;
@@ -193,20 +207,25 @@ const getStockSummary = async (req, res) => {
       { $sort: { itemName: 1 } },
     ]);
 
-    const enriched = summary.map((row) => {
-      const m = metricsFromAgg(row);
-      return {
-        stockKey: row.stockKey,
-        itemName: row.itemName,
-        category: row.category,
-        subcategory: row.subcategory,
-        brand: row.brand,
-        contentUnit: row.contentUnit,
-        ...m,
-        totalIn: m.purchaseIn,
-        totalOut: m.fieldUse,
-      };
-    });
+    const enriched = await Promise.all(
+      summary.map(async (row) => {
+        const m = metricsFromAgg(row);
+        await ensureCostingInitialized(row.stockKey);
+        const pendingBatches = await getPendingGodamOutBatches(row.stockKey);
+        return {
+          stockKey: row.stockKey,
+          itemName: row.itemName,
+          category: row.category,
+          subcategory: row.subcategory,
+          brand: row.brand,
+          contentUnit: row.contentUnit,
+          ...m,
+          totalIn: m.purchaseIn,
+          totalOut: m.fieldUse,
+          pendingGodamOutBatches: pendingBatches,
+        };
+      }),
+    );
 
     res.status(200).json({ stockSummary: enriched });
   } catch (error) {
@@ -402,12 +421,25 @@ const createStockIn = async (req, res) => {
     if (err) return res.status(400).json({ message: err });
 
     const payload = buildTxnPayload(req.body);
+    const { linkedExpenseId, totalPurchaseCost, unitCost } = req.body;
+
+    let purchaseCost = Number(totalPurchaseCost) || 0;
+    if (linkedExpenseId && !purchaseCost) {
+      const exp = await Expense.findById(linkedExpenseId);
+      if (exp) purchaseCost = exp.amount;
+    }
 
     const txn = new InventoryTransaction({
       type: "in",
       inReason: "purchase",
       ...payload,
       createdBy: req.user._id,
+    });
+
+    initializePurchaseLot(txn, {
+      linkedExpenseId: linkedExpenseId || undefined,
+      totalPurchaseCost: purchaseCost,
+      unitCost: Number(unitCost) || 0,
     });
 
     await txn.save();
@@ -471,6 +503,26 @@ const updateStockIn = async (req, res) => {
 
     Object.assign(existing, payload);
     existing.inReason = "purchase";
+
+    const consumedFromLot =
+      (existing.totalQuantity || 0) - (existing.qtyRemainingAtGodam ?? existing.totalQuantity);
+    const { totalPurchaseCost, unitCost, linkedExpenseId } = req.body;
+    if (totalPurchaseCost != null || unitCost != null || linkedExpenseId) {
+      let purchaseCost = Number(totalPurchaseCost) || existing.totalPurchaseCost || 0;
+      if (linkedExpenseId && !purchaseCost) {
+        const exp = await Expense.findById(linkedExpenseId);
+        if (exp) purchaseCost = exp.amount;
+      }
+      initializePurchaseLot(existing, {
+        linkedExpenseId: linkedExpenseId || existing.linkedExpenseId,
+        totalPurchaseCost: purchaseCost,
+        unitCost: Number(unitCost) || existing.unitCost || 0,
+      });
+    }
+    existing.qtyRemainingAtGodam = roundQty(
+      Math.max(0, payload.totalQuantity - consumedFromLot),
+    );
+
     await existing.save();
 
     const populated = await existing.populate("createdBy", "name email");
@@ -572,8 +624,15 @@ const createGodamOut = async (req, res) => {
       });
     }
 
+    const lotAllocations = await allocateLotsForGodamOut(
+      built.payload.stockKey,
+      built.payload.totalQuantity,
+    );
+
     const txn = new InventoryTransaction({
       ...built.payload,
+      lotAllocations,
+      qtyPendingFieldUse: built.payload.totalQuantity,
       createdBy: req.user._id,
     });
     await txn.save();
@@ -626,7 +685,31 @@ const updateGodamOut = async (req, res) => {
         .json({ message: "Godam mein itni miqdar baqi nahi" });
     }
 
+    const consumedQty = roundQty(
+      existing.totalQuantity - (existing.qtyPendingFieldUse ?? existing.totalQuantity),
+    );
+    if (built.payload.totalQuantity < consumedQty - EPS) {
+      return res.status(400).json({
+        message: `Miqdar kam nahi kar sakte — ${consumedQty} ${existing.contentUnit} field use ho chuka hai`,
+      });
+    }
+
+    if (existing.stockKey !== built.payload.stockKey) {
+      await reverseLotAllocations(existing.lotAllocations || []);
+      existing.lotAllocations = await allocateLotsForGodamOut(
+        built.payload.stockKey,
+        built.payload.totalQuantity,
+      );
+    } else if (Math.abs(built.payload.totalQuantity - existing.totalQuantity) > EPS) {
+      await reverseLotAllocations(existing.lotAllocations || []);
+      existing.lotAllocations = await allocateLotsForGodamOut(
+        built.payload.stockKey,
+        built.payload.totalQuantity,
+      );
+    }
+
     Object.assign(existing, built.payload);
+    existing.qtyPendingFieldUse = roundQty(built.payload.totalQuantity - consumedQty);
     await existing.save();
     const populated = await existing.populate("createdBy", "name email");
     res
@@ -664,6 +747,7 @@ const deleteGodamOut = async (req, res) => {
       });
     }
 
+    await reverseLotAllocations(existing.lotAllocations || []);
     await existing.deleteOne();
     res.status(200).json({ message: "Godam Out record delete ho gaya" });
   } catch (error) {
@@ -757,6 +841,7 @@ const createGodamReturn = async (req, res) => {
     });
 
     await txn.save();
+    await applyWapisToGodamOuts(stockKey, total);
     const populated = await txn.populate("createdBy", "name email role");
     res
       .status(201)
@@ -799,6 +884,13 @@ const mapTransactionToLedgerRow = (txn) => {
   const descParts = [];
   if (txn.notes?.trim()) descParts.push(txn.notes.trim());
   if (txn.issuedTo?.trim()) descParts.push(`Issued to: ${txn.issuedTo.trim()}`);
+  if (txn.crop) {
+    const cropLabel = CROP_LABELS[txn.crop] || txn.crop;
+    descParts.push(`Fasal: ${cropLabel}${txn.cropYear ? ` (${txn.cropYear})` : ""}`);
+  }
+  if (txn.totalCostSnapshot > 0) {
+    descParts.push(`Cost: Rs ${roundMoney(txn.totalCostSnapshot).toLocaleString()}`);
+  }
 
   return {
     _id: txn._id,
@@ -1009,6 +1101,64 @@ const getReconciliation = async (req, res) => {
   }
 };
 
+const getInventoryCostByCrop = async (req, res) => {
+  try {
+    const { cropYear, crop } = req.query;
+    const match = {
+      type: "out",
+      outReason: "field_use",
+    };
+    if (cropYear) match.cropYear = cropYear;
+    if (crop) match.crop = crop;
+
+    const rows = await InventoryTransaction.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: {
+            crop: "$crop",
+            cropYear: "$cropYear",
+            category: "$category",
+            itemName: "$itemName",
+          },
+          totalCost: { $sum: { $ifNull: ["$totalCostSnapshot", 0] } },
+          totalQty: { $sum: "$totalQuantity" },
+          movementCount: { $sum: 1 },
+          contentUnit: { $first: "$contentUnit" },
+        },
+      },
+      {
+        $sort: {
+          "_id.cropYear": -1,
+          "_id.crop": 1,
+          "_id.category": 1,
+        },
+      },
+    ]);
+
+    const summary = rows.map((r) => ({
+      crop: r._id.crop,
+      cropLabel: r._id.crop ? CROP_LABELS[r._id.crop] || r._id.crop : "—",
+      cropYear: r._id.cropYear || "—",
+      category: r._id.category,
+      itemName: r._id.itemName,
+      contentUnit: r.contentUnit,
+      totalQty: roundQty(r.totalQty),
+      totalCost: roundMoney(r.totalCost),
+      movementCount: r.movementCount,
+    }));
+
+    const grandTotal = roundMoney(summary.reduce((s, r) => s + r.totalCost, 0));
+
+    res.status(200).json({ summary, grandTotal, cropYear: cropYear || null, crop: crop || null });
+  } catch (error) {
+    res.status(500).json({
+      message: "Fasal cost report fetch karne mein masla aaya",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getStockSummary,
   getInventoryLedger,
@@ -1021,4 +1171,5 @@ module.exports = {
   deleteGodamOut,
   createGodamReturn,
   getReconciliation,
+  getInventoryCostByCrop,
 };

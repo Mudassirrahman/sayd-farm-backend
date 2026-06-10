@@ -1,4 +1,32 @@
 const mongoose = require("mongoose");
+const { CROP_VALUES } = require("../utils/cropConstants");
+
+const lotAllocationSchema = new mongoose.Schema(
+  {
+    purchaseTxnId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "InventoryTransaction",
+      required: true,
+    },
+    qty: { type: Number, required: true, min: 0.001 },
+    unitCost: { type: Number, default: 0, min: 0 },
+  },
+  { _id: false },
+);
+
+const godamOutAllocationSchema = new mongoose.Schema(
+  {
+    godamOutId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "InventoryTransaction",
+      required: true,
+    },
+    qty: { type: Number, required: true, min: 0.001 },
+    unitCost: { type: Number, default: 0, min: 0 },
+    cost: { type: Number, default: 0, min: 0 },
+  },
+  { _id: false },
+);
 
 const inventoryTransactionSchema = new mongoose.Schema(
   {
@@ -78,6 +106,53 @@ const inventoryTransactionSchema = new mongoose.Schema(
       type: Number,
       min: 0,
     },
+    /** Purchase lot — qty abhi godam mein (FIFO) */
+    qtyRemainingAtGodam: {
+      type: Number,
+      min: 0,
+    },
+    linkedExpenseId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Expense",
+    },
+    totalPurchaseCost: {
+      type: Number,
+      min: 0,
+    },
+    unitCost: {
+      type: Number,
+      min: 0,
+    },
+    /** Godam out relay baton — field use ke liye baqi */
+    qtyPendingFieldUse: {
+      type: Number,
+      min: 0,
+    },
+    lotAllocations: [lotAllocationSchema],
+    godamOutAllocations: [godamOutAllocationSchema],
+    crop: {
+      type: String,
+      enum: CROP_VALUES,
+    },
+    cropYear: {
+      type: String,
+      trim: true,
+    },
+    landBlock: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "LandBlock",
+    },
+    landSubAcre: {
+      type: mongoose.Schema.Types.ObjectId,
+    },
+    totalCostSnapshot: {
+      type: Number,
+      min: 0,
+    },
+    unitCostSnapshot: {
+      type: Number,
+      min: 0,
+    },
     irrigation: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Irrigation",
@@ -98,7 +173,7 @@ const inventoryTransactionSchema = new mongoose.Schema(
       default: "",
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 module.exports = mongoose.model("InventoryTransaction", inventoryTransactionSchema);

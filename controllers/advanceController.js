@@ -2,6 +2,9 @@ const mongoose = require("mongoose");
 const Advance = require("../models/advance");
 const Expense = require("../models/expense");
 const User = require("../models/user");
+const {
+  deleteExpenseWithLinkedAdjustment,
+} = require("../utils/expensePairing");
 
 // 1. Admin kisi user ko, ya manager khud ko funds add kar sakta hai
 const addAdvance = async (req, res) => {
@@ -97,12 +100,28 @@ const updateAdvance = async (req, res) => {
 const deleteAdvance = async (req, res) => {
   try {
     const { id } = req.params;
-    const deleted = await Advance.findByIdAndDelete(id);
+    const advance = await Advance.findById(id);
 
-    if (!deleted) {
+    if (!advance) {
       return res.status(404).json({ message: "Fund entry not found" });
     }
 
+    // Admin-deduct pair: auto-adjustment + expense are one transaction
+    if (advance.isAutoAdjustment && advance.linkedExpense) {
+      const deletedExpense = await deleteExpenseWithLinkedAdjustment(
+        advance.linkedExpense,
+      );
+      if (!deletedExpense) {
+        await Advance.findByIdAndDelete(id);
+      }
+      return res.status(200).json({
+        message:
+          "Auto-Adjustment and linked expense deleted successfully",
+        deletedPair: true,
+      });
+    }
+
+    await Advance.findByIdAndDelete(id);
     res.status(200).json({ message: "Fund entry deleted successfully" });
   } catch (error) {
     res

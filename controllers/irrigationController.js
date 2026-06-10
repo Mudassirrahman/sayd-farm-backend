@@ -4,6 +4,14 @@ const InventoryTransaction = require("../models/inventoryTransaction");
 const LandBlock = require("../models/landBlock");
 const { buildStockKey, getPendingReturnForKey } = require("../utils/inventoryUtils");
 const { isKhaadCategory } = require("../utils/categoryUtils");
+const {
+  allocateGodamOutsForFieldUse,
+  reverseGodamOutFieldAllocations,
+  deriveCropYear,
+  resolveCropFromLand,
+  roundMoney,
+  roundQty,
+} = require("../utils/inventoryCosting");
 
 const mapMaterial = (m) => {
   const material = {
@@ -76,13 +84,35 @@ const validateMaterialsStock = async (materialsUsed) => {
   return null;
 };
 
-const createOutTransactions = async (irrigationId, materialsUsed, userId, session) => {
+const createOutTransactions = async (
+  irrigationId,
+  materialsUsed,
+  userId,
+  session,
+  landContext = {},
+) => {
   const txns = [];
+  const { landBlock, landSubAcre, activityDate } = landContext;
+  const crop = await resolveCropFromLand(landBlock, landSubAcre, session);
+  const cropYear = deriveCropYear(activityDate);
+
   for (const mat of materialsUsed) {
     const stockKey = mat.stockKey || buildStockKey(mat);
+    const qty = Number(mat.quantityUsed);
+    const godamOutAllocations = await allocateGodamOutsForFieldUse(
+      stockKey,
+      qty,
+      session,
+    );
+    const totalCostSnapshot = roundMoney(
+      godamOutAllocations.reduce((s, a) => s + (a.cost || 0), 0),
+    );
+    const unitCostSnapshot = qty > 0 ? roundMoney(totalCostSnapshot / qty) : 0;
+
     const txn = new InventoryTransaction({
       type: "out",
       outReason: "field_use",
+      issuedDate: activityDate ? new Date(activityDate) : new Date(),
       itemName: mat.itemName,
       category: mat.category,
       subcategory: mat.subcategory || "",
@@ -91,12 +121,19 @@ const createOutTransactions = async (irrigationId, materialsUsed, userId, sessio
       containerCount: 0,
       contentPerContainer: 0,
       contentUnit: mat.contentUnit || "kg",
-      totalQuantity: Number(mat.quantityUsed),
-      quantityUsed: Number(mat.quantityUsed),
+      totalQuantity: qty,
+      quantityUsed: qty,
       stockKey,
       irrigation: irrigationId,
       createdBy: userId,
       notes: "Irrigation se use hua",
+      godamOutAllocations,
+      totalCostSnapshot,
+      unitCostSnapshot,
+      crop: crop || undefined,
+      cropYear,
+      landBlock: landBlock || undefined,
+      landSubAcre: landSubAcre || undefined,
     });
     if (session) await txn.save({ session });
     else await txn.save();
@@ -107,13 +144,27 @@ const createOutTransactions = async (irrigationId, materialsUsed, userId, sessio
 
 const deleteOutTransactions = async (irrigationId, session) => {
   const opts = session ? { session } : {};
+  const existing = await InventoryTransaction.find({
+    irrigation: irrigationId,
+    type: "out",
+    $or: [
+      { outReason: "field_use" },
+      { outReason: { $exists: false } },
+      { outReason: null },
+    ],
+  }).session(session || null);
+
+  for (const txn of existing) {
+    await reverseGodamOutFieldAllocations(txn.godamOutAllocations || [], session);
+  }
+
   await InventoryTransaction.deleteMany(
     {
       irrigation: irrigationId,
       type: "out",
       $or: [{ outReason: "field_use" }, { outReason: { $exists: false } }, { outReason: null }],
     },
-    opts
+    opts,
   );
 };
 
@@ -200,7 +251,17 @@ const createIrrigation = async (req, res) => {
     await irrigation.save({ session });
 
     if (materialsUsed?.length) {
-      await createOutTransactions(irrigation._id, irrigation.materialsUsed, req.user._id, session);
+      await createOutTransactions(
+        irrigation._id,
+        irrigation.materialsUsed,
+        req.user._id,
+        session,
+        {
+          landBlock: irrigation.landBlock,
+          landSubAcre: irrigation.landSubAcre,
+          activityDate: irrigation.activityDate,
+        },
+      );
     }
 
     await session.commitTransaction();
@@ -287,7 +348,17 @@ const updateIrrigation = async (req, res) => {
     await existing.save({ session });
 
     if (existing.materialsUsed?.length) {
-      await createOutTransactions(existing._id, existing.materialsUsed, req.user._id, session);
+      await createOutTransactions(
+        existing._id,
+        existing.materialsUsed,
+        req.user._id,
+        session,
+        {
+          landBlock: existing.landBlock,
+          landSubAcre: existing.landSubAcre,
+          activityDate: existing.activityDate,
+        },
+      );
     }
 
     await session.commitTransaction();

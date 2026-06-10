@@ -2,6 +2,9 @@ const Expense = require("../models/expense");
 const mongoose = require("mongoose");
 const Advance = require("../models/advance");
 const User = require("../models/user");
+const {
+  deleteExpenseWithLinkedAdjustment,
+} = require("../utils/expensePairing");
 
 const addExpense = async (req, res) => {
   try {
@@ -83,6 +86,8 @@ const addExpense = async (req, res) => {
       description,
       receiptUrl,
       serialNo: newSerialNo,
+      // Admin deduct-from-manager: admin is entering on behalf of manager — treat as approved
+      status: isAllocatedToManager ? "approved" : "pending",
     });
 
     await newExpense.save();
@@ -201,9 +206,17 @@ const getExpenses = async (req, res) => {
       return Number.isFinite(t) ? t : 0;
     };
 
+    // Expenses paired with admin "deduct from manager" auto-adjustments
+    const autoLinkedExpenseIds = new Set(
+      advancesList
+        .filter((adv) => adv.isAutoAdjustment && adv.linkedExpense)
+        .map((adv) => adv.linkedExpense.toString()),
+    );
+
     let mergedList = [];
 
     expensesList.forEach((exp) => {
+      const expId = exp._id.toString();
       mergedList.push({
         _id: exp._id,
         rawUserId: exp.user?._id?.toString() || exp.user?.toString() || "unknown",
@@ -223,6 +236,7 @@ const getExpenses = async (req, res) => {
         createdAt: exp.createdAt,
         isAutoAdjustment: false,
         linkedExpense: null,
+        hasPairedAutoAdjustment: autoLinkedExpenseIds.has(expId),
         status: exp.status || "pending",
       });
     });
@@ -280,6 +294,7 @@ const getExpenses = async (req, res) => {
         createdAt: sortCreatedAt,
         isAutoAdjustment: adv.isAutoAdjustment || false,
         linkedExpense: adv.linkedExpense || null,
+        hasPairedAutoAdjustment: adv.isAutoAdjustment || false,
       });
     });
 
@@ -317,15 +332,18 @@ const getExpenses = async (req, res) => {
     }));
 
     // Calculate running balance per user key (uses primaryDate sort order — unchanged).
-    // Only "approved" expenses deduct from balance; pending and rejected are shown
-    // in the ledger but do NOT affect the running balance.
+    // Approved expenses always deduct. Pending/rejected normally do not — except
+    // admin-deduct pairs (auto-linked), which net to zero with their credit row.
     const balanceByUser = new Map();
     mergedList = mergedList.map((item) => {
       const prev = balanceByUser.get(item.rawUserId) || 0;
       let next;
       if (item.rowType === "Add Fund") {
         next = prev + item.creditIn;
-      } else if (item.status === "approved") {
+      } else if (
+        item.status === "approved" ||
+        autoLinkedExpenseIds.has(item._id.toString())
+      ) {
         next = prev - item.debitOut;
       } else {
         next = prev; // pending / rejected — no balance change
@@ -363,6 +381,7 @@ const getExpenses = async (req, res) => {
       rowType: item.rowType,
       isAutoAdjustment: item.isAutoAdjustment,
       linkedExpense: item.linkedExpense,
+      hasPairedAutoAdjustment: item.hasPairedAutoAdjustment || false,
       userId: item.rawUserId,
       status: item.status ?? null,
     }));
@@ -441,8 +460,16 @@ const getExpenses = async (req, res) => {
     const approvedExpense       = approvedSummary[0]?.approvedExpense      || 0;
     const pendingExpense        = pendingSummary[0]?.pendingExpense         || 0;
     const totalFunds            = fundSummaryAgg[0]?.totalFunds            || 0;
-    // Balance only counts approved expenses; intentionally allows negative
-    const remainingBalance      = totalFunds - approvedExpense;
+    const pendingAutoLinkedExpense = expensesList
+      .filter(
+        (exp) =>
+          exp.status !== "approved" &&
+          autoLinkedExpenseIds.has(exp._id.toString()),
+      )
+      .reduce((sum, exp) => sum + (exp.amount || 0), 0);
+    // Approved expenses + pending admin-deduct pairs reduce balance (matches Fund tab)
+    const remainingBalance      =
+      totalFunds - approvedExpense - pendingAutoLinkedExpense;
 
     res.status(200).json({
       message: "Ledger fetched successfully",
@@ -511,11 +538,14 @@ const updateExpense = async (req, res) => {
 const deleteExpense = async (req, res) => {
   try {
     const { id } = req.params;
-    const deletedExpense = await Expense.findByIdAndDelete(id);
+    const deletedExpense = await deleteExpenseWithLinkedAdjustment(id);
     if (!deletedExpense) {
       return res.status(404).json({ message: "Expense not found" });
     }
-    res.status(200).json({ message: "Expense deleted successfully" });
+    res.status(200).json({
+      message: "Expense and linked Auto-Adjustment (if any) deleted successfully",
+      deletedPair: true,
+    });
   } catch (error) {
     res.status(500).json({ message: "Failed to delete expense", error: error.message });
   }
