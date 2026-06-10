@@ -23,7 +23,7 @@ dotenv.config();
 // Connect to MongoDB
 connectDB();
 
-// Middlewares
+// Middlewares 
 app.use(
   cors({
     origin: [
