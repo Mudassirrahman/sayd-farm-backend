@@ -28,7 +28,7 @@ router.post("/transactions", authenticateUser, rolesMiddleware("admin", "user"),
 router.put("/transactions/:id", authenticateUser, roleMiddleware("admin"), updateStockIn);
 router.delete("/transactions/:id", authenticateUser, roleMiddleware("admin"), deleteStockIn);
 
-router.post("/godam-out", authenticateUser, roleMiddleware("admin"), createGodamOut);
+router.post("/godam-out", authenticateUser, rolesMiddleware("admin", "user"), createGodamOut);
 router.put("/godam-out/:id", authenticateUser, roleMiddleware("admin"), updateGodamOut);
 router.delete("/godam-out/:id", authenticateUser, roleMiddleware("admin"), deleteGodamOut);
 
