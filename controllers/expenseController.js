@@ -6,6 +6,24 @@ const {
   deleteExpenseWithLinkedAdjustment,
 } = require("../utils/expensePairing");
 
+/** Admin khud ki personal expense — manager ledger / list se alag */
+const isAdminPersonalExpenseQuery = (adminUserIds) => ({
+  user: { $in: adminUserIds },
+  createdBy: { $in: adminUserIds },
+  $expr: { $eq: ["$user", "$createdBy"] },
+});
+
+const excludeAdminPersonalFromQuery = (query, adminUserIds) => {
+  if (!adminUserIds?.length) return query;
+  const exclusion = { $nor: [isAdminPersonalExpenseQuery(adminUserIds)] };
+  if (query.$and) {
+    query.$and.push(exclusion);
+  } else {
+    query.$and = [exclusion];
+  }
+  return query;
+};
+
 const addExpense = async (req, res) => {
   try {
     const {
@@ -50,6 +68,8 @@ const addExpense = async (req, res) => {
 
     const isAllocatedToManager =
       req.user.role === "admin" && deductFromUser === "true";
+    const isAdminPersonal =
+      req.user.role === "admin" && !isAllocatedToManager;
 
     if (isAllocatedToManager && !targetUserId) {
       return res.status(400).json({
@@ -86,8 +106,8 @@ const addExpense = async (req, res) => {
       description,
       receiptUrl,
       serialNo: newSerialNo,
-      // Admin deduct-from-manager: admin is entering on behalf of manager — treat as approved
-      status: isAllocatedToManager ? "approved" : "pending",
+      // Manager allocation + admin personal: no approval queue
+      status: isAllocatedToManager || isAdminPersonal ? "approved" : "pending",
     });
 
     await newExpense.save();
@@ -158,32 +178,51 @@ const getExpenses = async (req, res) => {
     const isAdminUser = req.user.role === "admin";
     const explicitMode =
       mode === "admin_personal" || mode === "manager_ledger" ? mode : null;
+    const adminUserIds = isAdminUser
+      ? await User.find({ role: "admin" }).distinct("_id")
+      : [];
 
     if (!isAdminUser) {
       query.user = currentUserId;
       advanceQuery.user = currentUserId;
+    } else if (explicitMode === "admin_personal") {
+      query.user = currentUserId;
+      query.createdBy = currentUserId;
+      advanceQuery.user = currentUserId;
     } else {
-      if (explicitMode === "admin_personal") {
-        query.user = currentUserId;
-        advanceQuery.user = currentUserId;
-      } else if (explicitMode === "manager_ledger") {
-        if (userId) {
-          query.user = new mongoose.Types.ObjectId(userId);
-          advanceQuery.user = new mongoose.Types.ObjectId(userId);
-        } else {
-          query.user = { $ne: currentUserId };
-          advanceQuery.user = { $ne: currentUserId };
-        }
-      } else if (userId === "admin_self") {
-        query.user = currentUserId;
-        advanceQuery.user = currentUserId;
+      const isFarmLedgerView =
+        explicitMode === "manager_ledger" || explicitMode === null;
+
+      if (userId === "admin_self") {
+        // Legacy param — farm ledger: allocations only, not admin personal
+        query.createdBy = currentUserId;
+        query.user = { $ne: currentUserId };
+        advanceQuery.givenBy = currentUserId;
+        advanceQuery.user = { $ne: currentUserId };
       } else if (userId) {
         const filterUserId = new mongoose.Types.ObjectId(userId);
-        // Match any record where the selected user is involved in ANY capacity:
-        //   Expenses — owner (user) OR the person who logged it (createdBy)
-        //   Advances — recipient (user) OR the person who gave it (givenBy) 
-        query.$or = [{ user: filterUserId }, { createdBy: filterUserId }];
-        advanceQuery.$or = [{ user: filterUserId }, { givenBy: filterUserId }];
+        const filterIsAdmin = adminUserIds.some((id) => id.equals(filterUserId));
+
+        if (filterIsAdmin) {
+          // Admin filter on farm ledger: manager allocations only
+          query.createdBy = filterUserId;
+          query.user = { $ne: filterUserId };
+          advanceQuery.givenBy = filterUserId;
+          advanceQuery.user = { $ne: filterUserId };
+        } else if (explicitMode === "manager_ledger") {
+          query.user = filterUserId;
+          advanceQuery.user = filterUserId;
+        } else {
+          query.$or = [{ user: filterUserId }, { createdBy: filterUserId }];
+          advanceQuery.$or = [{ user: filterUserId }, { givenBy: filterUserId }];
+        }
+      } else if (explicitMode === "manager_ledger") {
+        query.user = { $ne: currentUserId };
+        advanceQuery.user = { $ne: currentUserId };
+      }
+
+      if (isFarmLedgerView) {
+        excludeAdminPersonalFromQuery(query, adminUserIds);
       }
     }
 
@@ -212,11 +251,18 @@ const getExpenses = async (req, res) => {
         .filter((adv) => adv.isAutoAdjustment && adv.linkedExpense)
         .map((adv) => adv.linkedExpense.toString()),
     );
+    const autoAdjByExpenseId = new Map(
+      advancesList
+        .filter((adv) => adv.isAutoAdjustment && adv.linkedExpense)
+        .map((adv) => [adv.linkedExpense.toString(), adv]),
+    );
 
     let mergedList = [];
 
     expensesList.forEach((exp) => {
       const expId = exp._id.toString();
+      const pairedAdv = autoAdjByExpenseId.get(expId);
+      const hasPaired = !!pairedAdv;
       mergedList.push({
         _id: exp._id,
         rawUserId: exp.user?._id?.toString() || exp.user?.toString() || "unknown",
@@ -230,35 +276,29 @@ const getExpenses = async (req, res) => {
         category: exp.category,
         subCategory: exp.subcategory || null,
         debitOut: exp.amount,
-        creditIn: 0,
+        creditIn: hasPaired ? pairedAdv.amount : 0,
         receiptUrl: exp.receiptUrl || null,
         primaryDate: exp.expenseDate || exp.createdAt,
         createdAt: exp.createdAt,
         isAutoAdjustment: false,
         linkedExpense: null,
-        hasPairedAutoAdjustment: autoLinkedExpenseIds.has(expId),
+        linkedAdvanceId: hasPaired ? pairedAdv._id : null,
+        hasPairedAutoAdjustment: hasPaired,
         status: exp.status || "pending",
       });
     });
 
-    // Build a lookup of expenseId → createdAt so that Auto-Adjustment entries can be
-    // assigned a sort key that is 1ms BEFORE their linked expense. This guarantees that
-    // the credit (Auto-Adjustment) always sorts strictly before its paired debit (Expense)
-    // regardless of which document MongoDB persisted first.
-    const expenseCreatedAtMap = new Map(
-      expensesList.map((exp) => [exp._id.toString(), new Date(exp.createdAt).getTime()])
-    );
-
     advancesList.forEach((adv) => {
+      // Admin-deduct credits are shown on the paired expense row (Credit In column)
+      if (adv.isAutoAdjustment && adv.linkedExpense) return;
+
       const isAdminAdded = adv?.givenBy?.role === "admin";
       const isSelfAddedFund =
         String(adv?.givenBy?._id || adv?.givenBy) ===
         String(adv?.user?._id || adv?.user);
 
       let fundLabel = "Fund Added";
-      if (adv.isAutoAdjustment) {
-        fundLabel = "Auto-Adjustment (Admin Deduction)";
-      } else if (isAdminAdded) {
+      if (isAdminAdded) {
         fundLabel = "Fund Added by Admin";
       } else if (isSelfAddedFund) {
         fundLabel = "Fund Added by Manager/User (Self)";
@@ -266,20 +306,11 @@ const getExpenses = async (req, res) => {
         fundLabel = "Fund Added by Manager/User";
       }
 
-      // For Auto-Adjustments: use linkedExpense.createdAt - 1ms as the sort key.
-      // This places the credit entry immediately before its paired expense in every sort,
-      // so balance always goes positive before the debit is applied.
-      let sortCreatedAt = adv.createdAt;
-      if (adv.isAutoAdjustment && adv.linkedExpense) {
-        const linkedTs = expenseCreatedAtMap.get(adv.linkedExpense.toString());
-        if (linkedTs) sortCreatedAt = new Date(linkedTs - 1);
-      }
-
       mergedList.push({
         _id: adv._id,
         rawUserId: adv.user?._id?.toString() || adv.user?.toString() || "unknown",
         rowType: "Add Fund",
-        typeName: adv.isAutoAdjustment ? "Auto-Adjustment" : "Fund",
+        typeName: "Fund",
         purchasingDate: adv.dateGiven || adv.createdAt,
         entryDate: adv.createdAt,
         addedBy: adv.givenBy?.name || "Unknown",
@@ -291,16 +322,15 @@ const getExpenses = async (req, res) => {
         creditIn: adv.amount,
         receiptUrl: null,
         primaryDate: adv.dateGiven || adv.createdAt,
-        createdAt: sortCreatedAt,
-        isAutoAdjustment: adv.isAutoAdjustment || false,
-        linkedExpense: adv.linkedExpense || null,
-        hasPairedAutoAdjustment: adv.isAutoAdjustment || false,
+        createdAt: adv.createdAt,
+        isAutoAdjustment: false,
+        linkedExpense: null,
+        linkedAdvanceId: null,
+        hasPairedAutoAdjustment: false,
       });
     });
 
     // Sort oldest-to-newest: establishes srNumber sequence and running balance.
-    // Auto-Adjustments already have createdAt = linkedExpense.createdAt - 1ms,
-    // so they will always land immediately before their paired expense.
     mergedList.sort((a, b) => {
       const dateDiff = getTime(a.primaryDate) - getTime(b.primaryDate);
       if (dateDiff !== 0) return dateDiff;
@@ -331,19 +361,17 @@ const getExpenses = async (req, res) => {
       srNumber: srMap.get(item._id.toString()),
     }));
 
-    // Calculate running balance per user key (uses primaryDate sort order — unchanged).
-    // Approved expenses always deduct. Pending/rejected normally do not — except
-    // admin-deduct pairs (auto-linked), which net to zero with their credit row.
+    // Calculate running balance per user key (uses primaryDate sort order).
     const balanceByUser = new Map();
     mergedList = mergedList.map((item) => {
       const prev = balanceByUser.get(item.rawUserId) || 0;
       let next;
       if (item.rowType === "Add Fund") {
         next = prev + item.creditIn;
-      } else if (
-        item.status === "approved" ||
-        autoLinkedExpenseIds.has(item._id.toString())
-      ) {
+      } else if (item.hasPairedAutoAdjustment) {
+        // Admin deduct: credit + debit on one row (same net as former two-row pair)
+        next = prev + item.creditIn - item.debitOut;
+      } else if (item.status === "approved") {
         next = prev - item.debitOut;
       } else {
         next = prev; // pending / rejected — no balance change
@@ -381,6 +409,7 @@ const getExpenses = async (req, res) => {
       rowType: item.rowType,
       isAutoAdjustment: item.isAutoAdjustment,
       linkedExpense: item.linkedExpense,
+      linkedAdvanceId: item.linkedAdvanceId ?? null,
       hasPairedAutoAdjustment: item.hasPairedAutoAdjustment || false,
       userId: item.rawUserId,
       status: item.status ?? null,
@@ -395,8 +424,6 @@ const getExpenses = async (req, res) => {
     //   → totalExpense - adminAllocatedExpense
     // totalFunds: sum of all advances in scope (date + user filtered)
     // remainingBalance: totalFunds - totalExpense (supports negative values)
-
-    const adminUserIds = await User.find({ role: "admin" }).distinct("_id");
 
     // Queries scoped to approved-only (for balance calculations)
     const approvedQuery   = { ...query,   status: "approved" };
@@ -471,19 +498,25 @@ const getExpenses = async (req, res) => {
     const remainingBalance      =
       totalFunds - approvedExpense - pendingAutoLinkedExpense;
 
+    const summary = {
+      totalRecords: expensesList.length,
+      totalExpense,
+      approvedExpense,
+      pendingExpense,
+      managerDirectExpense,
+      adminAllocatedExpense,
+      totalFunds,
+      remainingBalance,
+      categoryBreakdown: categoryTotals,
+    };
+
+    if (explicitMode === "admin_personal") {
+      summary.adminTotal = totalExpense;
+    }
+
     res.status(200).json({
       message: "Ledger fetched successfully",
-      summary: {
-        totalRecords: expensesList.length,
-        totalExpense,
-        approvedExpense,
-        pendingExpense,
-        managerDirectExpense,
-        adminAllocatedExpense,
-        totalFunds,
-        remainingBalance,
-        categoryBreakdown: categoryTotals,
-      },
+      summary,
       data: ledgerData,
     });
   } catch (error) {
