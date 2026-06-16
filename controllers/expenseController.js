@@ -330,23 +330,16 @@ const getExpenses = async (req, res) => {
       });
     });
 
-    // Sort oldest-to-newest: establishes srNumber sequence and running balance.
-    mergedList.sort((a, b) => {
-      const dateDiff = getTime(a.primaryDate) - getTime(b.primaryDate);
-      if (dateDiff !== 0) return dateDiff;
+    // Entry order (createdAt): shared by Sr# assignment and running balance so values
+    // stay on the correct row when purchasing dates are back-dated out of entry sequence.
+    const compareEntryOrder = (a, b) => {
       const createdDiff = getTime(a.createdAt) - getTime(b.createdAt);
       if (createdDiff !== 0) return createdDiff;
-      // Exact same ms (non-linked same-date entries): credit before debit
       if (a.rowType === b.rowType) return 0;
       return a.rowType === "Add Fund" ? -1 : 1;
-    });
+    };
 
-    // Assign monthly-reset Sr Numbers based on createdAt ORDER within each createdAt-month.
-    // We sort a separate copy by createdAt to get the correct sequence, then map sr# back
-    // to the main list (which stays sorted by primaryDate for balance calculation).
-    const sortedByCreatedAt = [...mergedList].sort(
-      (a, b) => getTime(a.createdAt) - getTime(b.createdAt)
-    );
+    const sortedByCreatedAt = [...mergedList].sort(compareEntryOrder);
     const monthCounter = new Map();
     const srMap = new Map();
     sortedByCreatedAt.forEach((item) => {
@@ -356,29 +349,30 @@ const getExpenses = async (req, res) => {
       monthCounter.set(monthKey, current);
       srMap.set(item._id.toString(), current);
     });
-    mergedList = mergedList.map((item) => ({
-      ...item,
-      srNumber: srMap.get(item._id.toString()),
-    }));
 
-    // Calculate running balance per user key (uses primaryDate sort order).
     const balanceByUser = new Map();
-    mergedList = mergedList.map((item) => {
+    const balanceMap = new Map();
+    sortedByCreatedAt.forEach((item) => {
       const prev = balanceByUser.get(item.rawUserId) || 0;
       let next;
       if (item.rowType === "Add Fund") {
         next = prev + item.creditIn;
       } else if (item.hasPairedAutoAdjustment) {
-        // Admin deduct: credit + debit on one row (same net as former two-row pair)
         next = prev + item.creditIn - item.debitOut;
       } else if (item.status === "approved") {
         next = prev - item.debitOut;
       } else {
-        next = prev; // pending / rejected — no balance change
+        next = prev;
       }
       balanceByUser.set(item.rawUserId, next);
-      return { ...item, balance: next };
+      balanceMap.set(item._id.toString(), next);
     });
+
+    mergedList = mergedList.map((item) => ({
+      ...item,
+      srNumber: srMap.get(item._id.toString()),
+      balance: balanceMap.get(item._id.toString()) ?? 0,
+    }));
 
     // Display sort: newest createdAt-month first; within same month newest sr# (highest) first.
     // Using createdAt month so grouping matches the sr# month — back-dated entries
