@@ -31,6 +31,7 @@ const addExpense = async (req, res) => {
       amount,
       category,
       subcategory,
+      subSubcategory,
       expenseDate,
       description,
       deductFromUser,
@@ -102,6 +103,7 @@ const addExpense = async (req, res) => {
       amount: amountNumber,
       category,
       subcategory: subcategory || null,
+      subSubcategory: subSubcategory || null,
       expenseDate: dateObj,
       description,
       receiptUrl,
@@ -275,6 +277,7 @@ const getExpenses = async (req, res) => {
         itemDescription: exp.description || null,
         category: exp.category,
         subCategory: exp.subcategory || null,
+        subSubCategory: exp.subSubcategory || null,
         debitOut: exp.amount,
         creditIn: hasPaired ? pairedAdv.amount : 0,
         receiptUrl: exp.receiptUrl || null,
@@ -318,6 +321,7 @@ const getExpenses = async (req, res) => {
         itemDescription: adv.description || null,
         category: "Funds",
         subCategory: null,
+        subSubCategory: null,
         debitOut: 0,
         creditIn: adv.amount,
         receiptUrl: null,
@@ -396,6 +400,7 @@ const getExpenses = async (req, res) => {
       itemDescription: item.itemDescription,
       category: item.category,
       subCategory: item.subCategory,
+      subSubCategory: item.subSubCategory ?? null,
       debitOut: item.debitOut,
       creditIn: item.creditIn,
       balance: item.balance,
@@ -522,12 +527,13 @@ const getExpenses = async (req, res) => {
 const updateExpense = async (req, res) => {
   try {
     const { id } = req.params;
-    const { itemName, amount, category, subcategory, expenseDate, description } = req.body;
+    const { itemName, amount, category, subcategory, subSubcategory, expenseDate, description } = req.body;
 
     const allowedUpdates = {};
     if (itemName !== undefined) allowedUpdates.itemName = String(itemName).trim();
     if (category !== undefined) allowedUpdates.category = String(category).trim();
     if (subcategory !== undefined) allowedUpdates.subcategory = subcategory || null;
+    if (subSubcategory !== undefined) allowedUpdates.subSubcategory = subSubcategory || null;
     if (expenseDate !== undefined) allowedUpdates.expenseDate = new Date(expenseDate);
     if (description !== undefined) allowedUpdates.description = description;
 

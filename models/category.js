@@ -10,8 +10,17 @@ const categorySchema = new mongoose.Schema(
     },
     subcategories: [
       {
-        type: String,
-        trim: true,
+        name: {
+          type: String,
+          trim: true,
+          required: true,
+        },
+        subSubcategories: [
+          {
+            type: String,
+            trim: true,
+          },
+        ],
       },
     ],
   },

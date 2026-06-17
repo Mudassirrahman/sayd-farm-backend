@@ -32,6 +32,11 @@ const expenseSchema = new mongoose.Schema(
       trim: true,
       default: null,
     },
+    subSubcategory: {
+      type: String,
+      trim: true,
+      default: null,
+    },
     expenseDate: {
       type: Date,
       default: Date.now,

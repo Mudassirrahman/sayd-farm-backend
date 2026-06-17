@@ -1,4 +1,5 @@
 const Category = require("../models/category");
+const { normalizeSubcategories } = require("../utils/categoryUtils");
 
 // GET all categories
 const getCategories = async (req, res) => {
@@ -9,11 +10,7 @@ const getCategories = async (req, res) => {
 
     const normalizedCategories = categories.map((category) => ({
       ...category,
-      subcategories: Array.isArray(category.subcategories)
-        ? category.subcategories
-            .map((item) => (typeof item === "string" ? item.trim() : ""))
-            .filter(Boolean)
-        : [],
+      subcategories: normalizeSubcategories(category.subcategories),
     }));
     res.status(200).json({ categories: normalizedCategories });
   } catch (error) {
@@ -37,7 +34,7 @@ const createCategory = async (req, res) => {
 
     const category = new Category({
       name: name.trim(),
-      subcategories: subcategories || [],
+      subcategories: normalizeSubcategories(subcategories),
     });
 
     await category.save();
@@ -64,7 +61,7 @@ const updateCategory = async (req, res) => {
 
     const updated = await Category.findByIdAndUpdate(
       id,
-      { name: name.trim(), subcategories: subcategories || [] },
+      { name: name.trim(), subcategories: normalizeSubcategories(subcategories) },
       { new: true, runValidators: true }
     );
 
