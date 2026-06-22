@@ -14,6 +14,8 @@ const landBlockRoutes = require("./routes/landBlockRoutes");
 const inventoryCategoryRoutes = require("./routes/inventoryCategoryRoutes");
 const inventoryRoutes = require("./routes/inventoryRoutes");
 const irrigationRoutes = require("./routes/irrigationRoutes");
+const workerRoutes = require("./routes/workerRoutes");
+const attendanceRoutes = require("./routes/attendanceRoutes");
 
 const app = express();
 
@@ -48,6 +50,8 @@ app.use("/land-blocks", landBlockRoutes);
 app.use("/inventory-categories", inventoryCategoryRoutes);
 app.use("/inventory", inventoryRoutes);
 app.use("/irrigations", irrigationRoutes);
+app.use("/workers", workerRoutes);
+app.use("/attendance", attendanceRoutes);
 
 // Default route
 app.get("/", (req, res) => {
