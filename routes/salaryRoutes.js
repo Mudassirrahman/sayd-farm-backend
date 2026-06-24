@@ -23,7 +23,7 @@ router.post("/advances", authenticateUser, rolesMiddleware("admin", "user"), cre
 router.put("/advances/:id/approve", authenticateUser, roleMiddleware("admin"), approveSalaryAdvance);
 router.put("/advances/:id/reject", authenticateUser, roleMiddleware("admin"), rejectSalaryAdvance);
 
-router.post("/loans", authenticateUser, roleMiddleware("admin"), createWorkerLoan);
+router.post("/loans", authenticateUser, rolesMiddleware("admin", "user"), createWorkerLoan);
 router.put("/worker/:id/salary", authenticateUser, roleMiddleware("admin"), setWorkerSalary);
 router.put("/payments/:workerId/mark-paid", authenticateUser, roleMiddleware("admin"), markSalaryPaid);
 
