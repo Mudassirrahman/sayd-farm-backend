@@ -12,11 +12,6 @@ const workerSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
-    monthlySalary: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
     isActive: {
       type: Boolean,
       default: true,

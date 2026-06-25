@@ -24,7 +24,7 @@ const attendanceSchema = new mongoose.Schema(
       enum: ATTENDANCE_STATUSES,
       required: true,
     },
-    /** Salary module will sum dayFraction per worker per month */
+    /** Present-day weight: absent=0, half=0.5, full=1 */
     dayFraction: {
       type: Number,
       required: true,

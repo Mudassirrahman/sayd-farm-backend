@@ -56,7 +56,7 @@ const getWorkers = async (req, res) => {
 const updateWorker = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, role, isActive, monthlySalary } = req.body;
+    const { name, role, isActive } = req.body;
 
     const worker = await Worker.findById(id);
     if (!worker) {
@@ -79,14 +79,6 @@ const updateWorker = async (req, res) => {
 
     if (isActive !== undefined) {
       worker.isActive = Boolean(isActive);
-    }
-
-    if (monthlySalary !== undefined) {
-      const salary = Number(monthlySalary);
-      if (!Number.isFinite(salary) || salary < 0) {
-        return res.status(400).json({ message: "Valid monthly salary chahiye." });
-      }
-      worker.monthlySalary = salary;
     }
 
     await worker.save();

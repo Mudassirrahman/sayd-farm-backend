@@ -129,7 +129,9 @@ const addExpense = async (req, res) => {
 
     res.status(201).json({ message: "Expense added successfully", data: newExpense });
   } catch (error) {
-    res.status(500).json({ message: "Failed to add expense", error: error.message });
+    res.status(error.statusCode || 500).json({
+      message: error.message || "Failed to add expense",
+    });
   }
 };
 

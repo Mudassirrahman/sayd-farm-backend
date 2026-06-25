@@ -16,7 +16,6 @@ const inventoryRoutes = require("./routes/inventoryRoutes");
 const irrigationRoutes = require("./routes/irrigationRoutes");
 const workerRoutes = require("./routes/workerRoutes");
 const attendanceRoutes = require("./routes/attendanceRoutes");
-const salaryRoutes = require("./routes/salaryRoutes");
 
 const app = express();
 
@@ -53,7 +52,6 @@ app.use("/inventory", inventoryRoutes);
 app.use("/irrigations", irrigationRoutes);
 app.use("/workers", workerRoutes);
 app.use("/attendance", attendanceRoutes);
-app.use("/salary", salaryRoutes);
 
 // Default route
 app.get("/", (req, res) => {

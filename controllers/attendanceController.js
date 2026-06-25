@@ -165,7 +165,7 @@ const upsertAttendance = async (req, res) => {
 };
 
 /**
- * Worker ki hazri history — salary module is endpoint ko use karega.
+ * Worker ki hazri history.
  * Query: from, to (YYYY-MM-DD), optional month (YYYY-MM)
  */
 const getWorkerAttendanceHistory = async (req, res) => {
