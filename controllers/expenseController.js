@@ -79,18 +79,20 @@ const addExpense = async (req, res) => {
 
     const newSerialNo = lastExpense?.serialNo ? lastExpense.serialNo + 1 : 1;
 
-    const isAllocatedToManager =
+    const isAdminAllocatedToManager =
       req.user.role === "admin" && deductFromUser === "true";
+    const isManagerSelfFundedPair =
+      req.user.role === "user" && deductFromUser === "true";
     const isAdminPersonal =
-      req.user.role === "admin" && !isAllocatedToManager;
+      req.user.role === "admin" && !isAdminAllocatedToManager;
 
-    if (isAllocatedToManager && !targetUserId) {
+    if (isAdminAllocatedToManager && !targetUserId) {
       return res.status(400).json({
         message: "Please select a manager when 'Deduct from Manager' is enabled.",
       });
     }
 
-    if (isAllocatedToManager) {
+    if (isAdminAllocatedToManager) {
       const targetUser = await User.findById(targetUserId).select("_id role");
       if (!targetUser || targetUser.role !== "user") {
         return res.status(400).json({
@@ -99,7 +101,17 @@ const addExpense = async (req, res) => {
       }
     }
 
-    const expenseOwnerId = isAllocatedToManager ? targetUserId : req.user._id;
+    if (isManagerSelfFundedPair && targetUserId) {
+      const targetStr = String(targetUserId);
+      const selfStr = String(req.user._id);
+      if (targetStr !== selfStr) {
+        return res.status(403).json({
+          message: "You can only create self-funded paired entries against your own fund.",
+        });
+      }
+    }
+
+    const expenseOwnerId = isAdminAllocatedToManager ? targetUserId : req.user._id;
     const amountNumber = Number(amount);
 
     if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
@@ -132,8 +144,8 @@ const addExpense = async (req, res) => {
       description,
       receiptUrl,
       serialNo: newSerialNo,
-      // Manager allocation + admin personal: no approval queue
-      status: isAllocatedToManager || isAdminPersonal ? "approved" : "pending",
+      // Admin allocation + admin personal: no approval queue; manager self-funded stays pending
+      status: isAdminAllocatedToManager || isAdminPersonal ? "approved" : "pending",
       linkedWorkerId: linkedWorkerId || null,
       payrollMonth: payrollMonth || null,
       payrollPaymentType: payrollPaymentType || null,
@@ -148,13 +160,24 @@ const addExpense = async (req, res) => {
 
     await processLabourExpenseAfterSave(newExpense, req.user);
 
-    if (isAllocatedToManager) {
+    if (isAdminAllocatedToManager) {
       const autoAdvance = new Advance({
         user: targetUserId,
         amount: amountNumber,
         dateGiven: dateObj,
         givenBy: req.user._id,
         description: `Auto-Adjustment for Expense: ${itemName} (S.No: ${newSerialNo})`,
+        isAutoAdjustment: true,
+        linkedExpense: newExpense._id,
+      });
+      await autoAdvance.save();
+    } else if (isManagerSelfFundedPair) {
+      const autoAdvance = new Advance({
+        user: req.user._id,
+        amount: amountNumber,
+        dateGiven: dateObj,
+        givenBy: req.user._id,
+        description: `Self-Funded Auto-Adjustment: ${itemName} (S.No: ${newSerialNo})`,
         isAutoAdjustment: true,
         linkedExpense: newExpense._id,
       });
@@ -171,7 +194,17 @@ const addExpense = async (req, res) => {
 
 const getExpenses = async (req, res) => {
   try {
-    const { startDate, endDate, entryStartDate, entryEndDate, category, userId, mode } = req.query;
+    const {
+      startDate,
+      endDate,
+      entryStartDate,
+      entryEndDate,
+      category,
+      subcategory,
+      subSubcategory,
+      userId,
+      mode,
+    } = req.query;
 
     let query = {};
     let advanceQuery = {};
@@ -211,6 +244,16 @@ const getExpenses = async (req, res) => {
     if (category) {
       query.category = category;
     }
+
+    if (subcategory) {
+      query.subcategory = subcategory;
+    }
+
+    if (subSubcategory) {
+      query.subSubcategory = subSubcategory;
+    }
+
+    const hasCategoryTaxonomyFilter = !!(category || subcategory || subSubcategory);
 
     const currentUserId = new mongoose.Types.ObjectId(req.user._id || req.user.id);
     const isAdminUser = req.user.role === "admin";
@@ -270,7 +313,8 @@ const getExpenses = async (req, res) => {
       .lean();
 
     let advancesList = [];
-    const shouldIncludeAdvances = !category && explicitMode !== "admin_personal";
+    const shouldIncludeAdvances =
+      !hasCategoryTaxonomyFilter && explicitMode !== "admin_personal";
     if (shouldIncludeAdvances) {
       advancesList = await Advance.find(advanceQuery)
         .populate("user", "name role")
