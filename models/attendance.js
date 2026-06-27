@@ -1,12 +1,15 @@
 const mongoose = require("mongoose");
 
-const ATTENDANCE_STATUSES = ["absent", "full", "half"];
+const ATTENDANCE_STATUSES = ["absent", "full", "half", "leave"];
 
 const DAY_FRACTION_MAP = {
   absent: 0,
   half: 0.5,
   full: 1,
+  leave: 1,
 };
+
+const LEAVE_TYPES = ["regular", "admin_approved"];
 
 const attendanceSchema = new mongoose.Schema(
   {
@@ -41,6 +44,11 @@ const attendanceSchema = new mongoose.Schema(
       trim: true,
       default: null,
     },
+    leaveType: {
+      type: String,
+      enum: LEAVE_TYPES,
+      default: null,
+    },
   },
   {
     timestamps: true,
@@ -54,3 +62,4 @@ attendanceSchema.index({ worker: 1, date: -1 });
 module.exports = mongoose.model("Attendance", attendanceSchema);
 module.exports.ATTENDANCE_STATUSES = ATTENDANCE_STATUSES;
 module.exports.DAY_FRACTION_MAP = DAY_FRACTION_MAP;
+module.exports.LEAVE_TYPES = LEAVE_TYPES;

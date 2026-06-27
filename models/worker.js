@@ -16,6 +16,15 @@ const workerSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    monthlySalary: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
+    salaryEffectiveFrom: {
+      type: Date,
+      default: null,
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",

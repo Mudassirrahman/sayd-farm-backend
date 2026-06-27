@@ -1,7 +1,8 @@
 const Worker = require("../models/worker");
 const Attendance = require("../models/attendance");
-const { ATTENDANCE_STATUSES, DAY_FRACTION_MAP } = require("../models/attendance");
+const { ATTENDANCE_STATUSES, DAY_FRACTION_MAP, LEAVE_TYPES } = require("../models/attendance");
 const { normalizeToDay, formatDateKey, parseMonth, getMonthRange } = require("../utils/dateUtils");
+const { recomputePayPeriod } = require("../utils/payrollService");
 
 const getDailyAttendance = async (req, res) => {
   try {
@@ -76,19 +77,33 @@ const getMonthlyAttendance = async (req, res) => {
           _id: record._id,
           status: record.status,
           dayFraction: record.dayFraction,
+          leaveType: record.leaveType,
           markedBy: record.markedBy,
         };
       }
 
-      const summary = { full: 0, half: 0, absent: 0, notMarked: 0, totalDayFraction: 0 };
+      const summary = {
+        full: 0,
+        half: 0,
+        absent: 0,
+        leave: 0,
+        notMarked: 0,
+        unmarkedPast: 0,
+        totalDayFraction: 0,
+      };
 
       for (const dateKey of dates) {
         if (isCurrentMonth && dateKey > todayKey) continue;
 
         const att = attendanceByDate[dateKey];
         if (att) {
-          summary[att.status] += 1;
+          if (summary[att.status] !== undefined) {
+            summary[att.status] += 1;
+          }
           summary.totalDayFraction += att.dayFraction;
+        } else if (dateKey <= todayKey) {
+          summary.notMarked += 1;
+          summary.unmarkedPast += 1;
         } else {
           summary.notMarked += 1;
         }
@@ -113,7 +128,7 @@ const getMonthlyAttendance = async (req, res) => {
 
 const upsertAttendance = async (req, res) => {
   try {
-    const { workerId, date, status, note } = req.body;
+    const { workerId, date, status, note, leaveType } = req.body;
 
     if (!workerId || !date || !status) {
       return res.status(400).json({ message: "Worker, date aur status zaroori hain." });
@@ -135,6 +150,17 @@ const upsertAttendance = async (req, res) => {
       return res.status(400).json({ message: "Sahi date format chahiye (YYYY-MM-DD)." });
     }
 
+    let resolvedLeaveType = null;
+    if (status === "leave") {
+      if (leaveType && LEAVE_TYPES.includes(leaveType)) {
+        resolvedLeaveType = leaveType;
+      } else if (req.user.role === "admin") {
+        resolvedLeaveType = "admin_approved";
+      } else {
+        resolvedLeaveType = "regular";
+      }
+    }
+
     const dayFraction = DAY_FRACTION_MAP[status];
 
     const attendance = await Attendance.findOneAndUpdate(
@@ -144,6 +170,7 @@ const upsertAttendance = async (req, res) => {
         date: day,
         status,
         dayFraction,
+        leaveType: resolvedLeaveType,
         markedBy: req.user._id,
         note: note ? String(note).trim() : null,
       },
@@ -151,6 +178,9 @@ const upsertAttendance = async (req, res) => {
     )
       .populate("worker", "name role")
       .populate("markedBy", "name email role");
+
+    const monthKey = formatDateKey(day).slice(0, 7);
+    recomputePayPeriod(workerId, monthKey).catch(() => {});
 
     res.status(200).json({
       message: "Hazri save ho gayi.",

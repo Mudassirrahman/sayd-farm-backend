@@ -5,6 +5,14 @@ const User = require("../models/user");
 const {
   deleteExpenseWithLinkedAdjustment,
 } = require("../utils/expensePairing");
+const {
+  validateLabourExpense,
+  processLabourExpenseAfterSave,
+} = require("../utils/payrollExpenseHandler");
+const {
+  applySalaryPaymentSideEffects,
+  recomputePayPeriod,
+} = require("../utils/payrollService");
 
 /** Admin khud ki personal expense — manager ledger / list se alag */
 const isAdminPersonalExpenseQuery = (adminUserIds) => ({
@@ -36,6 +44,10 @@ const addExpense = async (req, res) => {
       description,
       deductFromUser,
       targetUserId,
+      linkedWorkerId,
+      payrollMonth,
+      payrollPaymentType,
+      payrollLoanInstallment,
     } = req.body;
 
     if (!itemName || !amount || !category) {
@@ -96,6 +108,18 @@ const addExpense = async (req, res) => {
         .json({ message: "Amount must be a valid number greater than 0" });
     }
 
+    await validateLabourExpense(
+      {
+        subcategory,
+        linkedWorkerId,
+        payrollPaymentType,
+        payrollMonth,
+        amount: amountNumber,
+        monthlyInstallment: payrollLoanInstallment,
+      },
+      req.user
+    );
+
     const newExpense = new Expense({
       user: expenseOwnerId,
       createdBy: req.user._id,
@@ -110,9 +134,19 @@ const addExpense = async (req, res) => {
       serialNo: newSerialNo,
       // Manager allocation + admin personal: no approval queue
       status: isAllocatedToManager || isAdminPersonal ? "approved" : "pending",
+      linkedWorkerId: linkedWorkerId || null,
+      payrollMonth: payrollMonth || null,
+      payrollPaymentType: payrollPaymentType || null,
+      payrollLoanInstallment: (() => {
+        if (payrollLoanInstallment == null || payrollLoanInstallment === "") return null;
+        const n = Number(payrollLoanInstallment);
+        return Number.isFinite(n) ? n : null;
+      })(),
     });
 
     await newExpense.save();
+
+    await processLabourExpenseAfterSave(newExpense, req.user);
 
     if (isAllocatedToManager) {
       const autoAdvance = new Advance({
@@ -573,10 +607,19 @@ const updateExpense = async (req, res) => {
 const deleteExpense = async (req, res) => {
   try {
     const { id } = req.params;
+    const existing = await Expense.findById(id);
     const deletedExpense = await deleteExpenseWithLinkedAdjustment(id);
     if (!deletedExpense) {
       return res.status(404).json({ message: "Expense not found" });
     }
+
+    if (
+      existing?.linkedWorkerId &&
+      existing?.payrollMonth
+    ) {
+      await recomputePayPeriod(existing.linkedWorkerId, existing.payrollMonth);
+    }
+
     res.status(200).json({
       message: "Expense and linked Auto-Adjustment (if any) deleted successfully",
       deletedPair: true,
@@ -598,17 +641,32 @@ const updateExpenseStatus = async (req, res) => {
         .json({ message: "Invalid status. Must be pending, approved, or rejected." });
     }
 
+    const existing = await Expense.findById(id);
+    if (!existing) {
+      return res.status(404).json({ message: "Expense not found" });
+    }
+
+    const previousStatus = existing.status;
+
     const expense = await Expense.findByIdAndUpdate(
       id,
       { $set: { status } },
       { new: true, runValidators: true },
     );
 
-    if (!expense) {
-      return res.status(404).json({ message: "Expense not found" });
-    }
-
     res.status(200).json({ message: "Expense status updated", data: expense });
+
+    if (
+      expense.linkedWorkerId &&
+      expense.payrollPaymentType === "salary" &&
+      expense.payrollMonth
+    ) {
+      if (status === "approved" && previousStatus !== "approved") {
+        await applySalaryPaymentSideEffects(expense);
+      } else {
+        await recomputePayPeriod(expense.linkedWorkerId, expense.payrollMonth);
+      }
+    }
   } catch (error) {
     res.status(500).json({ message: "Failed to update status", error: error.message });
   }

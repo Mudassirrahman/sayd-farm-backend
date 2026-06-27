@@ -56,6 +56,26 @@ const expenseSchema = new mongoose.Schema(
       enum: ["pending", "approved", "rejected"],
       default: "pending",
     },
+    linkedWorkerId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Worker",
+      default: null,
+    },
+    payrollMonth: {
+      type: String,
+      match: /^\d{4}-\d{2}$/,
+      default: null,
+    },
+    payrollPaymentType: {
+      type: String,
+      enum: ["salary", "advance", "loan"],
+      default: null,
+    },
+    payrollLoanInstallment: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
   },
   {
     timestamps: true,
