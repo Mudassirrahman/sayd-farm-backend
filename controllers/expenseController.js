@@ -8,6 +8,7 @@ const {
 const {
   validateLabourExpense,
   processLabourExpenseAfterSave,
+  isLabourSubcategory,
 } = require("../utils/payrollExpenseHandler");
 const {
   applySalaryPaymentSideEffects,
@@ -358,6 +359,10 @@ const getExpenses = async (req, res) => {
         category: exp.category,
         subCategory: exp.subcategory || null,
         subSubCategory: exp.subSubcategory || null,
+        linkedWorkerId: exp.linkedWorkerId || null,
+        payrollMonth: exp.payrollMonth || null,
+        payrollPaymentType: exp.payrollPaymentType || null,
+        payrollLoanInstallment: exp.payrollLoanInstallment ?? null,
         debitOut: exp.amount,
         creditIn: hasPaired ? pairedAdv.amount : 0,
         receiptUrl: exp.receiptUrl || null,
@@ -607,7 +612,57 @@ const getExpenses = async (req, res) => {
 const updateExpense = async (req, res) => {
   try {
     const { id } = req.params;
-    const { itemName, amount, category, subcategory, subSubcategory, expenseDate, description } = req.body;
+    const existing = await Expense.findById(id);
+    if (!existing) {
+      return res.status(404).json({ message: "Expense not found" });
+    }
+
+    const {
+      itemName,
+      amount,
+      category,
+      subcategory,
+      subSubcategory,
+      expenseDate,
+      description,
+      linkedWorkerId,
+      payrollMonth,
+      payrollPaymentType,
+      payrollLoanInstallment,
+    } = req.body;
+
+    const effectiveSubcategory =
+      subcategory !== undefined ? subcategory || null : existing.subcategory;
+    const effectiveAmount =
+      amount !== undefined ? Number(amount) : existing.amount;
+    const effectiveLinkedWorkerId =
+      linkedWorkerId !== undefined ? linkedWorkerId || null : existing.linkedWorkerId;
+    const effectivePayrollType =
+      payrollPaymentType !== undefined
+        ? payrollPaymentType || null
+        : existing.payrollPaymentType;
+    const effectivePayrollMonth =
+      payrollMonth !== undefined ? payrollMonth || null : existing.payrollMonth;
+    const effectiveLoanInstallment =
+      payrollLoanInstallment !== undefined
+        ? (() => {
+            if (payrollLoanInstallment == null || payrollLoanInstallment === "") return null;
+            const n = Number(payrollLoanInstallment);
+            return Number.isFinite(n) ? n : null;
+          })()
+        : existing.payrollLoanInstallment;
+
+    await validateLabourExpense(
+      {
+        subcategory: effectiveSubcategory,
+        linkedWorkerId: effectiveLinkedWorkerId,
+        payrollPaymentType: effectivePayrollType,
+        payrollMonth: effectivePayrollMonth,
+        amount: effectiveAmount,
+        monthlyInstallment: effectiveLoanInstallment,
+      },
+      req.user,
+    );
 
     const allowedUpdates = {};
     if (itemName !== undefined) allowedUpdates.itemName = String(itemName).trim();
@@ -631,6 +686,24 @@ const updateExpense = async (req, res) => {
       allowedUpdates.receiptUrl = `data:${req.file.mimetype};base64,${req.file.buffer.toString("base64")}`;
     }
 
+    if (subcategory !== undefined && !isLabourSubcategory(effectiveSubcategory)) {
+      allowedUpdates.linkedWorkerId = null;
+      allowedUpdates.payrollMonth = null;
+      allowedUpdates.payrollPaymentType = null;
+      allowedUpdates.payrollLoanInstallment = null;
+    } else {
+      if (linkedWorkerId !== undefined) {
+        allowedUpdates.linkedWorkerId = linkedWorkerId || null;
+      }
+      if (payrollMonth !== undefined) allowedUpdates.payrollMonth = payrollMonth || null;
+      if (payrollPaymentType !== undefined) {
+        allowedUpdates.payrollPaymentType = payrollPaymentType || null;
+      }
+      if (payrollLoanInstallment !== undefined) {
+        allowedUpdates.payrollLoanInstallment = effectiveLoanInstallment;
+      }
+    }
+
     const updatedExpense = await Expense.findByIdAndUpdate(
       id,
       { $set: allowedUpdates },
@@ -641,9 +714,23 @@ const updateExpense = async (req, res) => {
       return res.status(404).json({ message: "Expense not found" });
     }
 
+    const oldWorker = existing.linkedWorkerId?.toString();
+    const oldMonth = existing.payrollMonth;
+    const newWorker = updatedExpense.linkedWorkerId?.toString();
+    const newMonth = updatedExpense.payrollMonth;
+
+    if (newWorker && newMonth) {
+      await recomputePayPeriod(updatedExpense.linkedWorkerId, newMonth);
+    }
+    if (oldWorker && oldMonth && (oldWorker !== newWorker || oldMonth !== newMonth)) {
+      await recomputePayPeriod(existing.linkedWorkerId, oldMonth);
+    }
+
     res.status(200).json({ message: "Expense updated successfully", data: updatedExpense });
   } catch (error) {
-    res.status(500).json({ message: "Failed to update expense", error: error.message });
+    res.status(error.statusCode || 500).json({
+      message: error.message || "Failed to update expense",
+    });
   }
 };
 
